@@ -1,0 +1,17 @@
+{
+    "verification_failed": "Verification failed. Please try again.",
+    "invalid_answers": "Please check your answers and try again.",
+    "submission_failed": "Something went wrong submitting your application. Please try again.",
+    "field_required": "{label} is required.",
+    "line_breaks_not_allowed": "{label} can't contain line breaks.",
+    "too_long": "{label} is too long.",
+    "too_short": "{label} is too short.",
+    "invalid_email": "{label} doesn't look like a valid email address.",
+    "not_a_number": "{label} must be a whole number.",
+    "below_minimum": "{label} is below the minimum.",
+    "above_maximum": "{label} is above the maximum.",
+    "invalid_value": "Invalid value for {label}.",
+    "invalid_selection": "Invalid selection for {label}.",
+    "failure_email_subject": "There was a problem with your application",
+    "failure_email_body": "Something went wrong processing your application. Please try submitting again shortly."
+}

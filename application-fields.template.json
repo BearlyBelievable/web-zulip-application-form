@@ -1,0 +1,63 @@
+[
+    {
+        "name": "full_name",
+        "type": "text",
+        "required": true,
+        "label": "What's your name or preferred alias?"
+    },
+    {
+        "name": "invite_email",
+        "type": "email",
+        "required": true,
+        "label": "What email address should we send your invite to?",
+        "note_title": "Heads up",
+        "note_type": "info",
+        "note": "This is the address your invite link will be sent to, so make sure you can access it."
+    },
+    {
+        "name": "age",
+        "type": "number",
+        "required": true,
+        "min": 13,
+        "max": 120,
+        "label": "How old are you?"
+    },
+    {
+        "name": "role_interest",
+        "type": "select",
+        "required": true,
+        "options": ["Member", "Contributor", "Other"],
+        "label": "What's your interest in joining?"
+    },
+    {
+        "name": "role_interest_other",
+        "type": "text",
+        "required": true,
+        "show_when": {
+            "field": "role_interest",
+            "equals": "Other"
+        },
+        "label": "What's your interest, in your own words?"
+    },
+    {
+        "name": "agree_to_rules",
+        "type": "boolean",
+        "required": true,
+        "label": "Do you agree to follow the community guidelines?"
+    },
+    {
+        "name": "interests",
+        "type": "multiselect",
+        "required": false,
+        "options": ["Discussion", "Support", "Events", "Other"],
+        "label": "Which of these are you interested in?"
+    },
+    {
+        "name": "bio",
+        "type": "textarea",
+        "required": false,
+        "minlength": 20,
+        "maxlength": 500,
+        "label": "Tell us a bit about yourself."
+    }
+]
