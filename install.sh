@@ -156,7 +156,8 @@ apply_reverse_proxy_config() {
         return 0
     fi
 
-    backup="${site_conf}.bak.$(date +%s)"
+    mkdir -p "$APP_DIR/reverse-proxy-backups"
+    backup="$APP_DIR/reverse-proxy-backups/$(basename "$site_conf").bak.$(date +%s)"
     cp "$site_conf" "$backup"
 
     line_no=$(grep -n -F "$close_marker" "$site_conf" | tail -1 | cut -d: -f1)
