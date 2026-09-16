@@ -17,9 +17,13 @@ fi
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME=web-zulip-application-form
 SERVICE_UNIT_PATH=/etc/systemd/system/$SERVICE_NAME.service
+CHECK_PENDING_UNIT_NAME=web-zulip-application-form-check-pending
+CHECK_PENDING_SERVICE_UNIT_PATH=/etc/systemd/system/$CHECK_PENDING_UNIT_NAME.service
+CHECK_PENDING_TIMER_UNIT_PATH=/etc/systemd/system/$CHECK_PENDING_UNIT_NAME.timer
 RUN_AS_USER=zulip
 SECRETS_FILE="$APP_DIR/secrets.conf"
 CONFIG_FILE="$APP_DIR/config.conf"
+ZULIP_MANAGE_PY=/home/zulip/deployments/current/manage.py
 
 if [ ! -f /etc/zulip/settings.py ]; then
     echo "Error: /etc/zulip/settings.py not found. This app requires Zulip to" >&2
@@ -241,16 +245,60 @@ regenerate_files() {
         echo "pelicanconf.py already defines JINJA_GLOBALS on line $globals_line. Add"
         echo "this yourself to expose the field list to templates:"
         echo
+        echo "    import re"
+        echo
+        echo "    OPTION_SLUG_RE = re.compile(r'[^a-z0-9]+')"
+        echo
+        echo "    def resolve_conditional_names(fields, parent_name=None, option=None):"
+        echo "        resolved = []"
+        echo "        for index, field in enumerate(fields):"
+        echo "            if parent_name is not None:"
+        echo "                slug = OPTION_SLUG_RE.sub('_', option.lower()).strip('_')"
+        echo "                base_name = f'{parent_name}_{slug}'"
+        echo "                name = base_name if index == 0 else f'{base_name}_{index + 1}'"
+        echo "                field = {**field, 'name': name}"
+        echo "            conditional_options = field.get('conditional_options')"
+        echo "            if conditional_options:"
+        echo "                field = {**field, 'conditional_options': {"
+        echo "                    opt: resolve_conditional_names(children, parent_name=field['name'], option=opt)"
+        echo "                    for opt, children in conditional_options.items()"
+        echo "                }}"
+        echo "            resolved.append(field)"
+        echo "        return resolved"
+        echo
         echo "    with open(os.path.join(os.path.dirname(__file__), 'data', 'application-fields.json')) as f:"
-        echo "        APPLICATION_FIELDS = json.load(f)"
+        echo "        APPLICATION_FIELDS = resolve_conditional_names(json.load(f))"
         echo
         echo "and add 'application_fields': APPLICATION_FIELDS as a key in that"
         echo "existing JINJA_GLOBALS dict."
     else
         cat >> "$site_root/pelicanconf.py" <<'PYEOF'
 
+import re
+
+OPTION_SLUG_RE = re.compile(r'[^a-z0-9]+')
+
+
+def resolve_conditional_names(fields, parent_name=None, option=None):
+    resolved = []
+    for index, field in enumerate(fields):
+        if parent_name is not None:
+            slug = OPTION_SLUG_RE.sub('_', option.lower()).strip('_')
+            base_name = f'{parent_name}_{slug}'
+            name = base_name if index == 0 else f'{base_name}_{index + 1}'
+            field = {**field, 'name': name}
+        conditional_options = field.get('conditional_options')
+        if conditional_options:
+            field = {**field, 'conditional_options': {
+                opt: resolve_conditional_names(children, parent_name=field['name'], option=opt)
+                for opt, children in conditional_options.items()
+            }}
+        resolved.append(field)
+    return resolved
+
+
 with open(os.path.join(os.path.dirname(__file__), 'data', 'application-fields.json')) as f:
-    APPLICATION_FIELDS = json.load(f)
+    APPLICATION_FIELDS = resolve_conditional_names(json.load(f))
 
 JINJA_GLOBALS = {'application_fields': APPLICATION_FIELDS}
 PYEOF
@@ -300,6 +348,7 @@ if [ ! -f "$SECRETS_FILE" ]; then
 [secrets]
 smtp_password =
 turnstile_secret =
+zulip_bot_api_key =
 EOF
 fi
 
@@ -310,11 +359,25 @@ if [ ! -f "$CONFIG_FILE" ]; then
 [config]
 site_kind =
 site_root =
-application_recipient_email =
+zulip_site_url =
+application_channel_id =
+zulip_bot_email =
 application_email_subject =
+contact_email =
 smtp_user =
 reply_to_email =
 turnstile_site_key =
+
+# Advanced settings below, all optional. install.sh never prompts for
+# these, and the defaults shown here are what the app uses if a
+# setting is missing entirely. Edit a value directly to change it.
+max_attempts_per_ip = 3
+max_attempts_per_email = 3
+rate_limit_window_minutes = 60
+application_expiry_days = 30
+max_body_bytes = 8192
+max_text_length = 250
+max_textarea_length = 1000
 EOF
 fi
 
@@ -337,6 +400,34 @@ if [ "$MODE" = "update" ]; then
         echo "Error: no site configured yet. Choose \"Change configuration\" first." >&2
         exit 1
     fi
+
+    if [ -z "$(get_conf_value smtp_user "$CONFIG_FILE")" ]; then
+        prompt_for_key smtp_user "SMTP from address, used only if a technical failure needs to notify an applicant" no yes "$CONFIG_FILE"
+    fi
+    if [ -z "$(get_conf_value smtp_password "$SECRETS_FILE")" ]; then
+        prompt_for_key smtp_password "SMTP password" yes yes "$SECRETS_FILE"
+    fi
+    if [ -z "$(get_conf_value zulip_site_url "$CONFIG_FILE")" ]; then
+        prompt_for_key zulip_site_url "Zulip site URL (e.g. https://miatsu.co)" no yes "$CONFIG_FILE"
+    fi
+    if [ -z "$(get_conf_value application_channel_id "$CONFIG_FILE")" ]; then
+        prompt_for_key application_channel_id "Channel to post new applications to, by its numeric ID rather than its name, so a later rename doesn't break it (in the left sidebar, click the channel's ... menu, choose Copy link to channel, and use the number right after channel/ in that link)" no yes "$CONFIG_FILE"
+        CHANNEL_ID=$(get_conf_value application_channel_id "$CONFIG_FILE")
+        if ! [[ "$CHANNEL_ID" =~ ^[0-9]+$ ]]; then
+            echo "Error: application_channel_id must be a number, the channel's ID, not its name." >&2
+            exit 1
+        fi
+    fi
+    if [ -z "$(get_conf_value zulip_bot_email "$CONFIG_FILE")" ]; then
+        prompt_for_key zulip_bot_email "Application bot's email address (Personal settings > Bots)" no yes "$CONFIG_FILE"
+    fi
+    if [ -z "$(get_conf_value zulip_bot_api_key "$SECRETS_FILE")" ]; then
+        prompt_for_key zulip_bot_api_key "Application bot's API key" yes yes "$SECRETS_FILE"
+    fi
+    if [ -z "$(get_conf_value contact_email "$CONFIG_FILE")" ]; then
+        prompt_for_key contact_email "Contact address shown to an applicant who's already applied and waiting on review" no yes "$CONFIG_FILE"
+    fi
+
     regenerate_files
     echo
     echo "Rebuild your Pelican site to pick up the changes."
@@ -383,11 +474,21 @@ FIELDS_FILE="$SITE_ROOT/data/application-fields.json"
 
 regenerate_files
 
-prompt_for_key smtp_user "SMTP from address" no yes "$CONFIG_FILE"
+prompt_for_key smtp_user "SMTP from address, used only if a technical failure needs to notify an applicant" no yes "$CONFIG_FILE"
 prompt_for_key smtp_password "SMTP password" yes yes "$SECRETS_FILE"
-prompt_for_key application_recipient_email "Application recipient email" no yes "$CONFIG_FILE"
-prompt_for_key application_email_subject "Subject line for the application notification email, used as the topic if the recipient is a Zulip channel address (blank uses 'New application')" no no "$CONFIG_FILE"
 prompt_for_key reply_to_email "Reply-to address for emails this app sends (blank to use the SMTP from address)" no no "$CONFIG_FILE"
+
+prompt_for_key zulip_site_url "Zulip site URL (e.g. https://miatsu.co)" no yes "$CONFIG_FILE"
+prompt_for_key application_channel_id "Channel to post new applications to, by its numeric ID rather than its name, so a later rename doesn't break it (in the left sidebar, click the channel's ... menu, choose Copy link to channel, and use the number right after channel/ in that link)" no yes "$CONFIG_FILE"
+CHANNEL_ID=$(get_conf_value application_channel_id "$CONFIG_FILE")
+if ! [[ "$CHANNEL_ID" =~ ^[0-9]+$ ]]; then
+    echo "Error: application_channel_id must be a number, the channel's ID, not its name." >&2
+    exit 1
+fi
+prompt_for_key zulip_bot_email "Application bot's email address (Personal settings > Bots)" no yes "$CONFIG_FILE"
+prompt_for_key zulip_bot_api_key "Application bot's API key" yes yes "$SECRETS_FILE"
+prompt_for_key application_email_subject "Topic to post new applications under (blank uses 'New application')" no no "$CONFIG_FILE"
+prompt_for_key contact_email "Contact address shown to an applicant who's already applied and waiting on review" no yes "$CONFIG_FILE"
 
 prompt_for_key turnstile_site_key "Turnstile site key (blank to skip Cloudflare Turnstile verification)" no no "$CONFIG_FILE"
 prompt_for_key turnstile_secret "Turnstile secret key (blank to skip Cloudflare Turnstile verification)" yes no "$SECRETS_FILE"
@@ -404,6 +505,22 @@ if [ -n "$TURNSTILE_SITE_KEY" ]; then
     fi
 fi
 
+echo
+echo "Checking the duplicate-application check against Zulip..."
+if [ ! -f "$ZULIP_MANAGE_PY" ]; then
+    echo "Error: $ZULIP_MANAGE_PY not found. This doesn't look like a" >&2
+    echo "standard Zulip production install, so the duplicate-application" >&2
+    echo "check won't work." >&2
+    exit 1
+fi
+SMOKE_TEST_RESULT=$(CHECK_EMAIL="install-sh-smoke-test@example.com" "$ZULIP_MANAGE_PY" shell < "$APP_DIR/check_application_email.py" 2>&1 | grep "^RESULT:" || true)
+if [ "$SMOKE_TEST_RESULT" != "RESULT:none" ]; then
+    echo "Error: the duplicate-application check didn't produce the expected" >&2
+    echo "result. Expected 'RESULT:none', got: '$SMOKE_TEST_RESULT'" >&2
+    exit 1
+fi
+echo "Duplicate-application check is working."
+
 if [ ! -d "$APP_DIR/.venv" ]; then
     python3 -m venv "$APP_DIR/.venv"
 fi
@@ -413,10 +530,15 @@ chown -R $RUN_AS_USER:$RUN_AS_USER "$APP_DIR"
 
 sed -e "s|__APP_ROOT__|$APP_DIR|g" -e "s|__FIELDS_FILE__|$FIELDS_FILE|g" \
     "$APP_DIR/deploy/$SERVICE_NAME.service" > "$SERVICE_UNIT_PATH"
+sed -e "s|__APP_ROOT__|$APP_DIR|g" \
+    "$APP_DIR/deploy/$CHECK_PENDING_UNIT_NAME.service" > "$CHECK_PENDING_SERVICE_UNIT_PATH"
+cp "$APP_DIR/deploy/$CHECK_PENDING_UNIT_NAME.timer" "$CHECK_PENDING_TIMER_UNIT_PATH"
 systemctl daemon-reload
 systemctl enable --now $SERVICE_NAME
+systemctl enable --now "$CHECK_PENDING_UNIT_NAME.timer"
 
 echo "$SERVICE_NAME is running on 127.0.0.1:8793."
+echo "$CHECK_PENDING_UNIT_NAME.timer will check pending applications against Zulip daily."
 echo
 
 PS3="Which reverse proxy are you using? "

@@ -1,4 +1,4 @@
-{% for field in application_fields %}
+{% macro render_field(field) %}
 <div class="form-field">
   {% if field.type == 'boolean' %}
   <fieldset>
@@ -7,16 +7,18 @@
     <label><input type="radio" name="{{ field.name }}" value="false" {% if field.required %}required{% endif %}> No</label>
   </fieldset>
   {% elif field.type == 'select' %}
+  {% set full_options = field.options + ((field.conditional_options or {}).keys() | list) %}
   <label for="field-{{ field.name }}">{{ field.label }}</label>
   <select id="field-{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>
-    {% for option in field.options %}
+    {% for option in full_options %}
     <option value="{{ option }}">{{ option }}</option>
     {% endfor %}
   </select>
   {% elif field.type == 'multiselect' %}
+  {% set full_options = field.options + ((field.conditional_options or {}).keys() | list) %}
   <fieldset>
     <legend>{{ field.label }}</legend>
-    {% for option in field.options %}
+    {% for option in full_options %}
     <label><input type="checkbox" name="{{ field.name }}" value="{{ option }}"> {{ option }}</label>
     {% endfor %}
   </fieldset>
@@ -40,4 +42,16 @@
       {% if field.required %}required{% endif %}>
   {% endif %}
 </div>
+{% if field.conditional_options %}
+  {% for option, companions in field.conditional_options.items() %}
+    {% for companion in companions %}
+<div data-companion-of="{{ field.name }}" data-companion-when="{{ option }}" hidden>
+  {{ render_field(companion) }}
+</div>
+    {% endfor %}
+  {% endfor %}
+{% endif %}
+{% endmacro %}
+{% for field in application_fields %}
+{{ render_field(field) }}
 {% endfor %}

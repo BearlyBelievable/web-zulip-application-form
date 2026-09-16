@@ -26,18 +26,17 @@
         "name": "role_interest",
         "type": "select",
         "required": true,
-        "options": ["Member", "Contributor", "Other"],
-        "label": "What's your interest in joining?"
-    },
-    {
-        "name": "role_interest_other",
-        "type": "text",
-        "required": true,
-        "show_when": {
-            "field": "role_interest",
-            "equals": "Other"
-        },
-        "label": "What's your interest, in your own words?"
+        "label": "What's your interest in joining?",
+        "options": ["Member", "Contributor"],
+        "conditional_options": {
+            "Other": [
+                {
+                    "type": "text",
+                    "required": true,
+                    "label": "What's your interest, in your own words?"
+                }
+            ]
+        }
     },
     {
         "name": "agree_to_rules",
@@ -49,8 +48,8 @@
         "name": "interests",
         "type": "multiselect",
         "required": false,
-        "options": ["Discussion", "Support", "Events", "Other"],
-        "label": "Which of these are you interested in?"
+        "label": "Which of these are you interested in?",
+        "options": ["Discussion", "Support", "Events", "Other"]
     },
     {
         "name": "bio",

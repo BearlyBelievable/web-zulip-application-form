@@ -16,3 +16,7 @@ config.conf
 # Backups of reverse-proxy site configs, made by install.sh before it
 # edits one.
 /reverse-proxy-backups/
+
+# Local record of pending applications, used to detect a resubmission
+# while the first one is still awaiting manual review.
+applications.db
