@@ -22,11 +22,11 @@ site.
   check runs `manage.py shell` from that deployment directly.
 - A bot in Zulip (Personal settings > Bots), added to whatever
   channel should receive applications.
-- A transactional email service provider, only needed if a technical
-  failure needs to notify the contact address (the app reads SMTP
-  host and port defaults from `/etc/zulip/settings.py`).
+- A transactional email service provider for sending technical failure
+  notices (the app reads SMTP host and port defaults from
+  `/etc/zulip/settings.py`).
 - (Optional) A Pelican site checkout on the same server, if you want
-  the bundled application form template installed automatically.
+  to use the bundled application form template.
 - (Optional) A Cloudflare account and Turnstile key for spam
   protection.
 
@@ -37,25 +37,23 @@ site.
 1. Clone this repo.
 2. Run `sudo ./install.sh`. The first time, it walks through the full
    setup:
-    - Asks whether you're using Pelican or a custom site and where
-      the checkout lives, then writes the generated files.
-    - Prompts for the sender address used only if a technical failure
-      needs to notify the contact address, your SMTP password, and a
-      reply-to address (leave it blank to reuse the sender address),
-      storing them in `config.conf` and `secrets.conf`.
+    - Asks whether you're using Pelican or a custom site, and where
+      the site lives.
+    - Prompts for the sender address (used for technical failure
+      notifications), your SMTP password, and a reply-to address (leave
+      it blank to reuse the sender address).
     - Prompts for your Zulip site URL, the ID of the channel to post
-      applications to, the email and API key for the bot, and a
-      contact address to show an applicant who's already applied and
-      waiting on review.
-    - Prompts for a Cloudflare Turnstile site key and secret. Leave
-      both blank to skip Turnstile verification entirely.
+      applications to, the email and API key for the bot, and an email
+      address that applicants can reach out to for issues.
+    - Prompts for a Cloudflare Turnstile site key and secret (leave
+      both blank to skip Turnstile verification entirely).
     - Detects nginx, Apache, or Caddy and offers to wire up the
       `/apply` route for you, or skip it and use the examples in
       `deploy/reverse-proxy/` yourself.
-    - Runs the duplicate-application check once against a throwaway
-      email, to confirm the Zulip integration actually works before
-      finishing.
-3. Check it's live: `curl -i http://127.0.0.1:8793/apply` should
+    - Runs a check against a throwaway email to confirm the Zulip
+      integration actually works before finishing.
+3. Once install is complete, you can check if it's live with
+   `curl -i http://127.0.0.1:8793/apply` which should
    return a non-502 response.
 
 **Pelican:** `install.sh` wires up `pelicanconf.py` for you where it
@@ -85,15 +83,13 @@ Before posting a submission, the app checks the given email against
 three things, in order, and stops at the first match:
 
 - **Already has a Zulip account.** The applicant sees "That email
-  address can't be used", with no further explanation, and nothing
-  else happens.
+  address can't be used".
 - **Already has a pending invite that hasn't been used yet.** The
   applicant is told directly to check their inbox for the invite
   email.
 - **Already submitted an application that's still waiting on manual
   review.** Kept as a local record in `applications.db` next to
-  `app.py`. A record expires after 30 days and is deleted once the
-  same email later shows up as registered or invited. The applicant
+  `app.py`. A record expires automatically after 30 days. The applicant
   is told their application is still pending and given a contact
   address for anything urgent.
 
@@ -129,14 +125,6 @@ journal (`journalctl -u <unit name>`), since neither service redirects
 its output elsewhere. A failure is logged with what went wrong and
 how often, never the applicant's email address.
 
-## Rate limiting
-
-`/apply` enforces two independent limits, each 3 submissions per
-rolling hour: one on the submitting IP address and one on the
-submitted email address. Going over either one rejects the
-submission immediately, before the duplicate-application check or
-anything gets posted to Zulip.
-
 ## Advanced settings
 
 A few settings have sensible defaults and `install.sh` never prompts
@@ -152,6 +140,14 @@ the default.
 | `max_body_bytes` | `8192` | Largest `/apply` request body accepted. Raise this if a large set of fields makes a legitimate submission exceed it. |
 | `max_text_length` | `250` | Default character limit for a `text`/`email` field with no `maxlength` set. |
 | `max_textarea_length` | `1000` | Default character limit for a `textarea` field with no `maxlength` set. |
+
+## Rate limiting
+
+`/apply` enforces two independent limits, each 3 submissions per
+rolling hour by default. One checks on the submitting IP address,
+and the other checks on the submitted email address. Going over
+either one rejects the submission immediately, before the
+duplicate-application check or anything gets posted to Zulip.
 
 ## Cloudflare Turnstile (optional)
 
@@ -201,14 +197,13 @@ that reads `data/application-fields.json` and renders every field,
 using CSS classes like `.application-form`, `.form-field`,
 `.radio-group`, `.checkbox-group`, and `.form-message` (with an
 `is-success` or `is-error` class added once a submission finishes)
-that you can style yourself. It already disables the submit button
+that you can style yourself. It also disables the submit button
 while a submission is in flight and shows the result inline. To
 make Pelican actually build a page with that template, add
-`Template: application` to the metadata of some
-content page.
+`Template: application` to the metadata of whichever content page
+you want it to appear on.
 
-If you'd rather write your own markup than use `application.html`,
-drop [`render-fields.example.jinja`](examples/render-fields.example.jinja)
+If you'd rather write your own markup, drop [`render-fields.example.jinja`](examples/render-fields.example.jinja)
 into your template where the inputs go instead. It loops over
 `application_fields` and renders every field type.
 
