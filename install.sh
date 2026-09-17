@@ -227,6 +227,14 @@ regenerate_files() {
     cp "$APP_DIR/application-fields.template.json" "$fields_file"
     echo "Wrote $fields_file from application-fields.template.json."
 
+    limits_file="$site_root/data/application-limits.json"
+    max_text_length=$(get_conf_value max_text_length "$CONFIG_FILE")
+    max_textarea_length=$(get_conf_value max_textarea_length "$CONFIG_FILE")
+    mkdir -p "$(dirname "$limits_file")"
+    printf '{\n    "max_text_length": %s,\n    "max_textarea_length": %s\n}\n' \
+        "${max_text_length:-250}" "${max_textarea_length:-1000}" > "$limits_file"
+    echo "Wrote $limits_file from config.conf."
+
     if [ "$site_kind" != "Pelican" ]; then
         echo "Your own site needs to read/serve this file itself. See README.md."
         return

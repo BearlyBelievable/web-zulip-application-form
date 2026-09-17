@@ -121,7 +121,7 @@ inject_apply_by_email_link).split('<!--FORM_SPLIT-->') %}
     <textarea
         id="field-{{ field.name }}"
         name="{{ field.name }}"
-        maxlength="{{ field.maxlength | default(1000) }}"
+        maxlength="{{ field.maxlength | default(MAX_TEXTAREA_LENGTH) }}"
         {%
         if
         field.minlength
@@ -290,7 +290,7 @@ inject_apply_by_email_link).split('<!--FORM_SPLIT-->') %}
         id="field-{{ field.name }}"
         type="{{ field.type }}"
         name="{{ field.name }}"
-        maxlength="{{ field.maxlength | default(250) }}"
+        maxlength="{{ field.maxlength | default(MAX_TEXT_LENGTH) }}"
         {%
         if
         field.minlength
