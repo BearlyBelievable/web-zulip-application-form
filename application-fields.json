@@ -12,7 +12,7 @@
         "label": "What email address should we send your invite to?",
         "note_title": "Heads up",
         "note_type": "info",
-        "note": "This is the address your invite link will be sent to, so make sure you can access it."
+        "note_text": "This is the address your invite link will be sent to, so make sure you can access it."
     },
     {
         "name": "age",

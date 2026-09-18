@@ -7,5 +7,5 @@ Type=oneshot
 TimeoutStartSec=0
 User=zulip
 Group=zulip
-WorkingDirectory=__APP_ROOT__
+WorkingDirectory=__APP_ROOT__/app
 ExecStart=__APP_ROOT__/.venv/bin/python check_pending_applications.py

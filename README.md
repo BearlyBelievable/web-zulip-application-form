@@ -1,32 +1,31 @@
 # Web Zulip application form
 
-This is a small Flask back-end for hooking up an "Apply to join" form
-to a Zulip server. It validates a submission, optionally checks a
-Cloudflare Turnstile token, checks whether the email already has an
-account or a pending invite, and posts the answers to a Zulip channel
-using a bot account. If something goes wrong, such as a technical
-failure posting to Zulip or checking the account status, the
-submission is held locally and retried once the problem is fixed,
-and the contact address gets an email about it.
+![Python](https://img.shields.io/badge/python-3-blue)
+![Flask](https://img.shields.io/badge/flask-3.1-black)
+![Last commit](https://img.shields.io/github/last-commit/BearlyBelievable/web-zulip-application-form)
+[![License](https://img.shields.io/badge/license-PolyForm%20Internal%20Use%201.0.0-orange)](LICENSE)
 
-This was built with a Pelican site in mind, but should work with any
-site.
+This is a small Flask back-end for hooking up an "Apply to join" form
+to post in a [Zulip](https://zulip.com/) server via a bot account. It
+validates a submission on both the front-end and back-end, performs
+rate-limit and duplicate submission checks, and can optionally be
+hooked to a Cloudflare Turnstile token for automated spam and bot
+protection.
+
+This was built with a [Pelican](https://getpelican.com/) site in mind
+but should hopefully work with any site.
 
 ## Requirements
 
-- Python 3, for the virtual environment `install.sh` creates.
-- Zulip already installed on the same server this gets cloned to
-  (Debian or Ubuntu, with systemd), as a standard production install
-  with the usual `/home/zulip/deployments/current` layout. `install.sh`
-  reuses the existing `zulip` system user, and the duplicate-application
-  check runs `manage.py shell` from that deployment directly.
-- A bot in Zulip (Personal settings > Bots), added to whatever
-  channel should receive applications.
-- A transactional email service provider for sending technical failure
-  notices (the app reads SMTP host and port defaults from
-  `/etc/zulip/settings.py`).
-- (Optional) A Pelican site checkout on the same server, if you want
-  to use the bundled application form template.
+- A standard production deployment of Zulip installed on the same
+  server as this app. The app reuses the existing `zulip` system
+  user and runs a `manage.py shell` from that deployment directly.
+- A bot user in Zulip that's been added to whatever channel
+  should receive the applications.
+- A transactional email service provider set up in Zulip for
+  sending technical failure notices (the app reads SMTP host and
+  port defaults from `/etc/zulip/settings.py`).
+- (Optional) A Pelican site on the same server.
 - (Optional) A Cloudflare account and Turnstile key for spam
   protection.
 
@@ -35,9 +34,9 @@ site.
 ### First-time setup
 
 1. Clone this repo.
-2. Run `sudo ./install.sh`. The first time, it walks through the full
-   setup:
-    - Asks whether you're using Pelican or a custom site, and where
+2. Run `sudo ./install.sh`. It walks through the full setup the first
+   time:
+    - Asks whether you're using Pelican or a custom site and where
       the site lives.
     - Prompts for the sender address (used for technical failure
       notifications), your SMTP password, and a reply-to address (leave
@@ -45,91 +44,166 @@ site.
     - Prompts for your Zulip site URL, the ID of the channel to post
       applications to, the email and API key for the bot, and an email
       address that applicants can reach out to for issues.
-    - Prompts for a Cloudflare Turnstile site key and secret (leave
-      both blank to skip Turnstile verification entirely).
+    - Prompts for a Cloudflare Turnstile site key and secret.
     - Detects nginx, Apache, or Caddy and offers to wire up the
-      `/apply` route for you, or skip it and use the examples in
-      `deploy/reverse-proxy/` yourself.
+      `/apply` route for you. Skip that and use the examples in
+      `deploy/reverse-proxy/` if you'd rather set it up by hand.
     - Runs a check against a throwaway email to confirm the Zulip
       integration actually works before finishing.
-3. Once install is complete, you can check if it's live with
-   `curl -i http://127.0.0.1:8793/apply` which should
-   return a non-502 response.
+3. Once install is complete, you can check if it's live by running
+   `curl -i http://127.0.0.1:8793/apply`. It should return a non-502
+   response.
 
 **Pelican:** `install.sh` wires up `pelicanconf.py` for you where it
 safely can:
 
-- If `pelicanconf.py` doesn't already define `JINJA_GLOBALS`, it
-  appends the block that loads `data/application-fields.json` and
-  exposes it as the `application_fields` template global. If
-  `JINJA_GLOBALS` already exists, it won't touch it and instead tells
-  you the line number and what to add.
-- If `pelicanconf.py` doesn't already set `THEME_TEMPLATES_OVERRIDES`,
-  it adds `THEME_TEMPLATES_OVERRIDES = ["templates"]` and installs
-  [`examples/application.html`](examples/application.html) into that
-  new `templates` directory. If the setting already exists, it asks
-  before installing the template there.
+- Adds `STATIC_PATHS = ["extra"]` and
+  `THEME_TEMPLATES_OVERRIDES = ["templates"]` if `pelicanconf.py`
+  doesn't already set them.
+- On first run, it writes a starter page template, and then
+  generates a complete `application-form.html` that's included in
+  it. The template and form are placed into the templates
+  directory.
 
-### Changing configuration
+### Cloudflare Turnstile (optional)
 
-Run `sudo ./install.sh` again and choose "Change configuration" to go
-through the full setup again, for example to update your SMTP or
-Turnstile settings, or move to a different site checkout. You can
-also edit the config and secrets files directly.
+During install, you'll be asked to enter your Turnstile secret and
+site keys. The site key will be baked directly into the generated
+Turnstile widget in the `application-form.html`, so there's nothing
+you'll need to manually configure.
 
-## Detecting duplicate applications
+### Changing settings
 
-Before posting a submission, the app checks the given email against
-three things, in order, and stops at the first match:
+If you need to update any settings, run `sudo ./install.sh` again
+and choose "Change configuration" to go through the full setup
+again.
 
-- **Already has a Zulip account.** The applicant sees "That email
-  address can't be used".
-- **Already has a pending invite that hasn't been used yet.** The
-  applicant is told directly to check their inbox for the invite
-  email.
-- **Already submitted an application that's still waiting on manual
-  review.** Kept as a local record in `applications.db` next to
-  `app.py`. A record expires automatically after 30 days. The applicant
-  is told their application is still pending and given a contact
-  address for anything urgent.
+## Configuring the form fields
 
-Only a submission that matches none of these gets posted to Zulip and
-recorded as pending. The check itself runs
-[`check_application_email.py`](check_application_email.py) through
-Zulip's `manage.py shell`.
+`application-fields.json` includes a full template showing how form
+fields can be added and defined. Every top-level field needs a
+unique `name`, a `type`, a `label`, and a `required` flag. `select`
+and `multiselect` fields can add `conditional_options` to show extra
+fields when a specific choice is picked. `text`, `email`, `textarea`,
+and `number` fields can set a min/max. Any field can add a `note`
+for a callout shown underneath it. The full list of options is as
+follows:
 
-A pending record is also cleared without waiting on a resubmission.
-`install.sh` sets up a daily systemd timer that runs
-[`check_pending_applications.py`](check_pending_applications.py),
-which rechecks every pending email against Zulip the same way and
-deletes any record that's since been invited or registered. If a
-recheck itself fails, an alert is emailed to the contact address.
+| Key | Required | Meaning |
+|---|---|---|
+| `name` | yes, except inside `conditional_options` | Form field name. Must be unique. |
+| `type` | yes | One of `text`, `email`, `textarea`, `number`, `select`, `boolean`, `multiselect`. |
+| `label` | yes | The question shown to the applicant. |
+| `required` | yes | Whether the field must be filled in. |
+| `note_type`, `note_title`, `note_text` | optional, but all three must be filled | A callout shown under the field: `note_type` is `info`, `caution`, or `warning`, `note_title` is its heading, and `note_text` is its body. |
+| `min`, `max` | `number` only | Optional value bounds. |
+| `minlength`, `maxlength` | `text`/`textarea`/`email` only | Character-count bounds. Default `maxlength` comes from `max_text_length` (`text`/`email`) or `max_textarea_length` (`textarea`) in `config.conf`. No default `minlength`. |
+| `options` | `select`/`multiselect` only | A list of options to select. |
+| `conditional_options` | `select`/`multiselect` only | Extra fields shown only when a specific choice is picked. |
+
+On `conditional_options`: a `name` key is not required, and the
+choice itself doesn't need to appear in `options` directly. Each
+nested field's name is generated from the parent field's name and
+the option it's shown under (`role_interest` + `Other` becomes
+`role_interest_other`). A `conditional_options` field can itself have
+`conditional_options` nested as deep as needed.
+
+To change the fields, just edit `application-fields.json` and then
+run `sudo ./install.sh`. Select "Just update the deployed files" to
+skip the setup questions and regenerate the embeddable
+`application-form.html`. No service restart is needed.
+
+**To note:** The field `invite_email` (type `email`) must always be
+present, as the `apply()` route in `app.py` uses it for the
+duplicate-application check and to address the application once
+it's posted to Zulip.
+
+## Hooking up your site
+
+The generated `application-form.html` includes the `<form>`
+element, every defined field, the message element, the submit
+button (disabled until every required field validates), and the
+`<link>`/`<script>` tags for its CSS and JS. It should be
+essentially ready to drop into any site as-is.
+
+**For Pelican sites:** `application-form.html` and the starter page
+template
+([`examples/page-template.example.jinja`](examples/page-template.example.jinja))
+are written into your `THEME_TEMPLATES_OVERRIDES` directory. The
+template extends your theme's `base.html` and is yours to customize
+(it won't be overwritten again). From there, just add
+`Template: application` to the meta-data of whichever content page
+you want the form to appear on.
+
+**Any other site:** `application-form.html`, `application-form.js`,
+and `application-form.css` are written straight into your site's
+root directory. The generated HTML file's contents can go wherever
+you want the form to appear on your page.
+
+### Styling the components
+
+The form uses CSS classes that you can style directly, like
+`.application-form`, `.form-field`, `.radio-group`,
+`.checkbox-group`, and `.form-message` (with `is-success` or
+`is-error` once a submission finishes). The form highlights an
+invalid field with a `.has-error`, and shows a live `used / max`
+count in a `.char-counter` element once a text field is close to
+its length limit. Both use normalized default colors that you can
+replace by setting the `--zulip-apply-error-color` and
+`--zulip-apply-warn-color` CSS custom properties in your
+stylesheet.
 
 ## Handling technical failures
 
-If a technical failure happens while processing a submission, such as
-a problem checking the account status or posting to Zulip, the
-submission is held locally in `applications.db` instead of being
-lost. The contact address gets an email about it, and the applicant
-just sees a submission-failed message on the page since there's
-nothing left for them to do.
-
-Held submissions are retried automatically by the same daily systemd
-timer that rechecks pending applications. Run
-`check_pending_applications.py` manually to retry sooner, once
-whatever caused the failure is fixed.
-
+If a technical failure happens while processing a submission, the
+application is held locally in `applications.db` instead of being
+lost. Your contact address will get an automated email about it, and
+the applicant will be shown a submission-failed message on the page.
 Both `web-zulip-application-form` and
 `web-zulip-application-form-check-pending` log to the systemd
-journal (`journalctl -u <unit name>`), since neither service redirects
-its output elsewhere. A failure is logged with what went wrong and
-how often, never the applicant's email address.
+journal (`journalctl -u <unit name>`) with what went wrong and how
+often the failure happened.
+
+Held submissions are retried automatically by the same timer that
+rechecks pending applications. You can run
+`check_pending_applications.py` manually to retry sooner once
+whatever caused the failure is fixed.
+
+## Rate limiting
+
+`/apply` enforces two independent rate limits: one on the submitting
+IP address and one on the submitted email address. Going over either
+one rejects the submission immediately before the
+duplicate-application check or anything gets posted to Zulip.
+
+## Detecting duplicate applications
+
+Before posting a submission, the app runs through Zulip's
+`manage.py shell` using `check_application_email()` in
+[`zulip_integration.py`](app/zulip_integration.py) and checks the
+given email against your server for current status:
+
+- **Already has a Zulip account:** The applicant sees a simple
+  "That email address can't be used" message.
+- **Already has a pending invite they haven't used yet:** Applicant
+  is told to check their inbox for the invite.
+- **An application was submitted but no invite sent yet:** The
+  application is kept as a local record in `applications.db` until
+  it expires (per `application_expiry_days`). The applicant is told
+  it's still pending and given the configured contact address for
+  anything urgent.
+
+A submission is only posted to Zulip and recorded as pending once it
+clears all three checks.
+
+`install.sh` sets up a daily systemd timer that runs
+[`check_pending_applications.py`](app/check_pending_applications.py),
+so that a pending record can clear on its own automatically.
 
 ## Advanced settings
 
-A few settings have sensible defaults and `install.sh` never prompts
-for them. Edit a value directly in `config.conf` to change it from
-the default.
+These settings already have sensible defaults, but you can edit the
+value in `config.conf` if you want something different.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -140,86 +214,3 @@ the default.
 | `max_body_bytes` | `8192` | Largest `/apply` request body accepted. Raise this if a large set of fields makes a legitimate submission exceed it. |
 | `max_text_length` | `250` | Default character limit for a `text`/`email` field with no `maxlength` set. |
 | `max_textarea_length` | `1000` | Default character limit for a `textarea` field with no `maxlength` set. |
-
-## Rate limiting
-
-`/apply` enforces two independent limits, each 3 submissions per
-rolling hour by default. One checks on the submitting IP address,
-and the other checks on the submitted email address. Going over
-either one rejects the submission immediately, before the
-duplicate-application check or anything gets posted to Zulip.
-
-## Cloudflare Turnstile (optional)
-
-Skip both the site key and secret prompts in `install.sh` to disable
-Turnstile entirely. No widget is needed on your form, and every
-submission is treated as verified.
-
-If you do use it, `secrets.conf` gets the secret and `config.conf`
-gets the site key. `install.sh` prints where the site key needs to go
-once you enter it:
-
-- **Pelican:** set it as the `TURNSTILE_SITE_KEY` environment
-  variable before building the Pelican site, or change the default in
-  `pelicanconf.py`.
-- **Any other site:** put it in the `data-sitekey` attribute of your
-  Turnstile widget.
-
-## Configuring the form fields
-
-Edit `application-fields.template.json` to change the fields, then
-run `sudo ./install.sh` again and choose "Just update the deployed
-files". This skips every setup question and just regenerates
-`data/application-fields.json` from
-`application-fields.template.json`, then, for a Pelican site,
-rechecks the template wiring. No service restart is needed.
-
-One field, `invite_email` (type `email`), must always be present. The
-`apply()` route in `app.py` uses it for the duplicate-application
-check and to address the application once it's posted to Zulip.
-
-| Key | Required | Meaning |
-|---|---|---|
-| `name` | yes, except inside `conditional_options` | Form field name. Must be unique. A field nested inside another field's `conditional_options` gets its name generated automatically instead (see below), and doesn't take this key at all. |
-| `type` | yes | One of `text`, `email`, `textarea`, `number`, `select`, `boolean`, `multiselect`. |
-| `label` | yes | The question shown to the applicant. |
-| `required` | yes | Whether the field must be filled in. |
-| `options` | `select`/`multiselect` only | Array of choices. Don't list a choice here if it has a `conditional_options` entry; that choice is added to the list automatically. |
-| `min`, `max` | `number` only | Optional value bounds. |
-| `minlength`, `maxlength` | `text`/`email`/`textarea` only | Character-count bounds. Default `maxlength` comes from `max_text_length` (`text`/`email`) or `max_textarea_length` (`textarea`) in `config.conf`. No default `minlength`. |
-| `conditional_options` | `select`/`multiselect` only | Extra fields shown and required only when a specific choice of this field is picked. Maps a choice to an array of field definitions, each without its own `name`: `{"Other": [{"type": "text", "required": true, "label": "..."}]}`. The choice itself (`"Other"` above) doesn't need to also appear in `options`, and each nested field's name is generated from the parent field's name and the choice (`role_interest` + `Other` becomes `role_interest_other`), so there's nothing to keep in sync by hand. A field inside `conditional_options` can have its own `conditional_options`, nested as deep as needed, but a form is easier to fill in with only a level or two of follow-up questions. |
-| `note`, `note_title`, `note_type` | optional | A callout shown under the field. `note_type` is `info`, `caution`, or `warning`. |
-
-## Hooking up your site
-
-**Pelican:** The bundled template is a complete, working example
-that reads `data/application-fields.json` and renders every field,
-using CSS classes like `.application-form`, `.form-field`,
-`.radio-group`, `.checkbox-group`, and `.form-message` (with an
-`is-success` or `is-error` class added once a submission finishes)
-that you can style yourself. It disables the submit button until
-every required field validates, highlights an invalid field with a
-`.has-error` class on its `.form-field` once you've interacted with
-it, and shows a live `used / max` count in a `.char-counter` element
-once a text field is close to its length limit. Both use normalized
-default colors that you can replace by setting the
-`--zulip-apply-error-color` and `--zulip-apply-warn-color` CSS
-custom properties in your own stylesheet. To make Pelican actually
-build a page with that template, add `Template: application` to the
-metadata of whichever content page you want it to appear on.
-
-If you'd rather write your own markup, drop [`render-fields.example.jinja`](examples/render-fields.example.jinja)
-into your template where the inputs go instead. It loops over
-`application_fields` and renders every field type.
-
-**Any other site:** Your site needs to serve
-`data/application-fields.json` at some URL. Your form needs a
-`submit` button, an element with `id="applicationFormMessage"` for
-the result to appear in, and a Cloudflare Turnstile widget if you're
-using one.
-[`render-fields.example.js`](examples/render-fields.example.js) is a
-drop-in script for a plain HTML/JS site with no build step. It
-submits the form to `/apply` itself, disabling the submit button
-while that's in flight and showing the result in the message
-element. Point the `FIELDS_URL` constant in it at wherever you serve
-the generated JSON, and include it after your form.

@@ -1,14 +1,10 @@
 import logging
 
-from app import (
-    STRINGS,
-    check_application_email,
-    delete_held_application,
-    delete_pending_application,
-    get_applications_db,
-    notify_admin_of_failure,
-    process_application,
-)
+from app import process_application
+from config import STRINGS
+from db import delete_held_application, delete_pending_application, get_applications_db
+from notifications import notify_admin_of_failure
+from zulip_integration import check_application_email
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
