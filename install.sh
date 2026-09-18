@@ -215,6 +215,13 @@ apply_reverse_proxy_config() {
     echo "$kind reloaded. Backup of the original file kept at $backup."
 }
 
+ensure_venv() {
+    if [ ! -d "$APP_DIR/.venv" ]; then
+        python3 -m venv "$APP_DIR/.venv"
+    fi
+    "$APP_DIR/.venv/bin/pip" install -q -r "$APP_DIR/requirements.txt"
+}
+
 regenerate_files() {
     local site_kind site_root fields_file template_overrides_dir
     local install_template needs_overrides_setting template_file confirm
@@ -224,19 +231,25 @@ regenerate_files() {
 
     fields_file="$site_root/data/application-fields.json"
     mkdir -p "$(dirname "$fields_file")"
-    cp "$APP_DIR/application-fields.template.json" "$fields_file"
-    echo "Wrote $fields_file from application-fields.template.json."
+    cp "$APP_DIR/application-fields.json" "$fields_file"
+    echo "Wrote $fields_file from application-fields.json."
 
-    limits_file="$site_root/data/application-limits.json"
     max_text_length=$(get_conf_value max_text_length "$CONFIG_FILE")
     max_textarea_length=$(get_conf_value max_textarea_length "$CONFIG_FILE")
-    mkdir -p "$(dirname "$limits_file")"
-    printf '{\n    "max_text_length": %s,\n    "max_textarea_length": %s\n}\n' \
-        "${max_text_length:-250}" "${max_textarea_length:-1000}" > "$limits_file"
-    echo "Wrote $limits_file from config.conf."
+    turnstile_site_key=$(get_conf_value turnstile_site_key "$CONFIG_FILE")
 
     if [ "$site_kind" != "Pelican" ]; then
-        echo "Your own site needs to read/serve this file itself. See README.md."
+        js_file="$site_root/application-form.js"
+        css_file="$site_root/application-form.css"
+        cp "$APP_DIR/generator/application-form.js" "$js_file"
+        cp "$APP_DIR/generator/application-form.css" "$css_file"
+        echo "Wrote $js_file and $css_file."
+
+        form_file="$site_root/application-form.html"
+        "$APP_DIR/.venv/bin/python" "$APP_DIR/generator/generate_form.py" "$fields_file" "$form_file" \
+            --max-text-length "${max_text_length:-250}" --max-textarea-length "${max_textarea_length:-1000}" \
+            --turnstile-site-key "$turnstile_site_key" --css-url /application-form.css --js-url /application-form.js
+        echo "Wrote $form_file. Embed its contents in your own page. See README.md."
         return
     fi
 
@@ -244,73 +257,6 @@ regenerate_files() {
         echo "Error: $site_root/pelicanconf.py not found. $site_root doesn't" >&2
         echo "look like a Pelican site checkout anymore." >&2
         exit 1
-    fi
-
-    if grep -q "application_fields" "$site_root/pelicanconf.py"; then
-        :
-    elif grep -q "^JINJA_GLOBALS[[:space:]]*=" "$site_root/pelicanconf.py"; then
-        globals_line=$(grep -n "^JINJA_GLOBALS[[:space:]]*=" "$site_root/pelicanconf.py" | head -1 | cut -d: -f1)
-        echo "pelicanconf.py already defines JINJA_GLOBALS on line $globals_line. Add"
-        echo "this yourself to expose the field list to templates:"
-        echo
-        echo "    import re"
-        echo
-        echo "    OPTION_SLUG_RE = re.compile(r'[^a-z0-9]+')"
-        echo
-        echo "    def resolve_conditional_names(fields, parent_name=None, option=None):"
-        echo "        resolved = []"
-        echo "        for index, field in enumerate(fields):"
-        echo "            if parent_name is not None:"
-        echo "                slug = OPTION_SLUG_RE.sub('_', option.lower()).strip('_')"
-        echo "                base_name = f'{parent_name}_{slug}'"
-        echo "                name = base_name if index == 0 else f'{base_name}_{index + 1}'"
-        echo "                field = {**field, 'name': name}"
-        echo "            conditional_options = field.get('conditional_options')"
-        echo "            if conditional_options:"
-        echo "                field = {**field, 'conditional_options': {"
-        echo "                    opt: resolve_conditional_names(children, parent_name=field['name'], option=opt)"
-        echo "                    for opt, children in conditional_options.items()"
-        echo "                }}"
-        echo "            resolved.append(field)"
-        echo "        return resolved"
-        echo
-        echo "    with open(os.path.join(os.path.dirname(__file__), 'data', 'application-fields.json')) as f:"
-        echo "        APPLICATION_FIELDS = resolve_conditional_names(json.load(f))"
-        echo
-        echo "and add 'application_fields': APPLICATION_FIELDS as a key in that"
-        echo "existing JINJA_GLOBALS dict."
-    else
-        cat >> "$site_root/pelicanconf.py" <<'PYEOF'
-
-import re
-
-OPTION_SLUG_RE = re.compile(r'[^a-z0-9]+')
-
-
-def resolve_conditional_names(fields, parent_name=None, option=None):
-    resolved = []
-    for index, field in enumerate(fields):
-        if parent_name is not None:
-            slug = OPTION_SLUG_RE.sub('_', option.lower()).strip('_')
-            base_name = f'{parent_name}_{slug}'
-            name = base_name if index == 0 else f'{base_name}_{index + 1}'
-            field = {**field, 'name': name}
-        conditional_options = field.get('conditional_options')
-        if conditional_options:
-            field = {**field, 'conditional_options': {
-                opt: resolve_conditional_names(children, parent_name=field['name'], option=opt)
-                for opt, children in conditional_options.items()
-            }}
-        resolved.append(field)
-    return resolved
-
-
-with open(os.path.join(os.path.dirname(__file__), 'data', 'application-fields.json')) as f:
-    APPLICATION_FIELDS = resolve_conditional_names(json.load(f))
-
-JINJA_GLOBALS = {'application_fields': APPLICATION_FIELDS}
-PYEOF
-        echo "Added the application_fields JINJA_GLOBALS wiring to pelicanconf.py."
     fi
 
     if grep -q "^STATIC_PATHS" "$site_root/pelicanconf.py"; then
@@ -328,47 +274,38 @@ PYEOF
         "s/^THEME_TEMPLATES_OVERRIDES[[:space:]]*=[[:space:]]*\[[[:space:]]*['\"]([^'\"]+)['\"].*/\1/p" \
         "$site_root/pelicanconf.py" | head -1)
 
-    install_template=y
     if [ -z "$template_overrides_dir" ]; then
         template_overrides_dir="templates"
         printf '\nTHEME_TEMPLATES_OVERRIDES = ["templates"]\n' >> "$site_root/pelicanconf.py"
         echo "Added THEME_TEMPLATES_OVERRIDES = [\"templates\"] to pelicanconf.py."
-    else
-        read -r -p "pelicanconf.py already sets THEME_TEMPLATES_OVERRIDES to '$template_overrides_dir'. Install the application form template there? [y/N] " install_template
     fi
+    case "$template_overrides_dir" in
+        /*) ;;
+        *) template_overrides_dir="$site_root/$template_overrides_dir" ;;
+    esac
+    mkdir -p "$template_overrides_dir"
 
-    if [ "$install_template" = "y" ] || [ "$install_template" = "Y" ]; then
-        case "$template_overrides_dir" in
-            /*) ;;
-            *) template_overrides_dir="$site_root/$template_overrides_dir" ;;
-        esac
-        template_file="$template_overrides_dir/application.html"
-        mkdir -p "$template_overrides_dir"
+    js_file="$site_root/content/extra/js/application-form.js"
+    mkdir -p "$(dirname "$js_file")"
+    cp "$APP_DIR/generator/application-form.js" "$js_file"
+    echo "Wrote $js_file."
 
-        confirm=y
-        if [ -f "$template_file" ]; then
-            read -r -p "$template_file already exists. Overwrite with the bundled template? [y/N] " confirm
-        fi
-        if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-            cp "$APP_DIR/examples/application.html" "$template_file"
-            echo "Wrote $template_file."
+    css_file="$site_root/content/extra/css/application-form.css"
+    mkdir -p "$(dirname "$css_file")"
+    cp "$APP_DIR/generator/application-form.css" "$css_file"
+    echo "Wrote $css_file."
 
-            js_file="$site_root/content/extra/js/application-form.js"
-            mkdir -p "$(dirname "$js_file")"
-            cp "$APP_DIR/examples/application-form.js" "$js_file"
-            echo "Wrote $js_file."
+    form_file="$template_overrides_dir/application-form.html"
+    "$APP_DIR/.venv/bin/python" "$APP_DIR/generator/generate_form.py" "$fields_file" "$form_file" \
+        --max-text-length "${max_text_length:-250}" --max-textarea-length "${max_textarea_length:-1000}" \
+        --turnstile-site-key "$turnstile_site_key" --css-url /extra/css/application-form.css --js-url /extra/js/application-form.js
+    echo "Wrote $form_file."
 
-            css_file="$site_root/content/extra/css/application-form.css"
-            mkdir -p "$(dirname "$css_file")"
-            cp "$APP_DIR/examples/application-form.css" "$css_file"
-            echo "Wrote $css_file."
-        else
-            echo "Left $template_file unchanged."
-        fi
-
-        echo "See README.md for the content page it still needs."
-    else
-        echo "Skipped installing the application form template. See README.md for what to add."
+    page_template_file="$template_overrides_dir/application.html"
+    if [ ! -f "$page_template_file" ]; then
+        cp "$APP_DIR/examples/page-template.example.jinja" "$page_template_file"
+        echo "Wrote a starter $page_template_file. Customize it for your own theme,"
+        echo "then add 'Template: application' to the content page's metadata."
     fi
 }
 
@@ -457,6 +394,7 @@ if [ "$MODE" = "update" ]; then
         prompt_for_key contact_email "Contact address shown to an applicant who's already applied and waiting on review" no yes "$CONFIG_FILE"
     fi
 
+    ensure_venv
     regenerate_files
     echo
     echo "Rebuild your Pelican site to pick up the changes."
@@ -501,6 +439,7 @@ fi
 
 FIELDS_FILE="$SITE_ROOT/data/application-fields.json"
 
+ensure_venv
 regenerate_files
 
 prompt_for_key smtp_user "SMTP from address, used only if a technical failure needs to notify an applicant" no yes "$CONFIG_FILE"
@@ -542,18 +481,16 @@ if [ ! -f "$ZULIP_MANAGE_PY" ]; then
     echo "check won't work." >&2
     exit 1
 fi
-SMOKE_TEST_RESULT=$(CHECK_EMAIL="install-sh-smoke-test@example.com" "$ZULIP_MANAGE_PY" shell < "$APP_DIR/check_application_email.py" 2>&1 | grep "^RESULT:" || true)
+SMOKE_TEST_RESULT=$(cd "$APP_DIR/app" && "$APP_DIR/.venv/bin/python" -c "
+from zulip_integration import check_application_email
+print('RESULT:' + check_application_email('install-sh-smoke-test@example.com'))
+" 2>&1 | grep "^RESULT:" || true)
 if [ "$SMOKE_TEST_RESULT" != "RESULT:none" ]; then
     echo "Error: the duplicate-application check didn't produce the expected" >&2
     echo "result. Expected 'RESULT:none', got: '$SMOKE_TEST_RESULT'" >&2
     exit 1
 fi
 echo "Duplicate-application check is working."
-
-if [ ! -d "$APP_DIR/.venv" ]; then
-    python3 -m venv "$APP_DIR/.venv"
-fi
-"$APP_DIR/.venv/bin/pip" install -q -r "$APP_DIR/requirements.txt"
 
 chown -R $RUN_AS_USER:$RUN_AS_USER "$APP_DIR"
 

@@ -1,0 +1,179 @@
+{% macro render_field(field, is_companion=False) %}
+<div class="form-field">
+    {% if field.type == 'boolean' %}
+    <fieldset class="form-field-fieldset">
+        <legend class="form-field-label">
+            {{ field.label }}{% if field.required %}
+            <span class="required-marker" aria-hidden="true">*</span>
+            {% endif %}
+        </legend>
+        <div class="radio-group">
+            <label
+                ><input
+                    type="radio"
+                    name="{{ field.name }}"
+                    value="true"
+                    {% if is_companion %}data-required="{% if field.required %}true{% else %}false{% endif %}"{% endif %}
+                    {% if field.required %}required{% endif %}
+                />
+                Yes</label
+            >
+            <label
+                ><input
+                    type="radio"
+                    name="{{ field.name }}"
+                    value="false"
+                    {% if is_companion %}data-required="{% if field.required %}true{% else %}false{% endif %}"{% endif %}
+                    {% if field.required %}required{% endif %}
+                />
+                No</label
+            >
+        </div>
+    </fieldset>
+    {% elif field.type == 'select' %}
+    <label for="field-{{ field.name }}"
+        >{{ field.label }}{% if field.required %}
+        <span class="required-marker" aria-hidden="true">*</span>
+        {% endif %}</label
+    >
+    <select
+        id="field-{{ field.name }}"
+        name="{{ field.name }}"
+        {% if is_companion %}data-required="{% if field.required %}true{% else %}false{% endif %}"{% endif %}
+        {% if field.required %}required{% endif %}
+    >
+        <option value="" disabled selected>Choose one</option>
+        {% for option in field.options + ((field.conditional_options or {}).keys() | list) %}
+        <option value="{{ option }}">{{ option }}</option>
+        {% endfor %}
+    </select>
+    {% elif field.type == 'multiselect' %}
+    <fieldset class="form-field-fieldset">
+        <legend class="form-field-label">
+            {{ field.label }}{% if field.required %}
+            <span class="required-marker" aria-hidden="true">*</span>
+            {% endif %}
+        </legend>
+        <div
+            class="checkbox-group"
+            data-multiselect="{{ field.name }}"
+            {% if field.required %}data-multiselect-required="true"{% endif %}
+        >
+            {% for option in field.options + ((field.conditional_options or {}).keys() | list) %}
+            <label
+                ><input
+                    type="checkbox"
+                    name="{{ field.name }}"
+                    value="{{ option }}"
+                />
+                {{ option }}</label
+            >
+            {% endfor %}
+        </div>
+    </fieldset>
+    {% elif field.type == 'textarea' %}
+    <label for="field-{{ field.name }}"
+        >{{ field.label }}{% if field.required %}
+        <span class="required-marker" aria-hidden="true">*</span>
+        {% endif %}</label
+    >
+    <textarea
+        id="field-{{ field.name }}"
+        name="{{ field.name }}"
+        maxlength="{{ field.maxlength | default(max_textarea_length) }}"
+        {% if field.minlength is defined %}minlength="{{ field.minlength }}"{% endif %}
+        placeholder="Type your answer here"
+        {% if is_companion %}data-required="{% if field.required %}true{% else %}false{% endif %}"{% endif %}
+        {% if field.required %}required{% endif %}
+    ></textarea>
+    {% elif field.type == 'number' %}
+    <label for="field-{{ field.name }}"
+        >{{ field.label }}{% if field.required %}
+        <span class="required-marker" aria-hidden="true">*</span>
+        {% endif %}</label
+    >
+    <input
+        id="field-{{ field.name }}"
+        type="number"
+        name="{{ field.name }}"
+        placeholder="00"
+        {% if field.min is defined %}min="{{ field.min }}"{% endif %}
+        {% if field.max is defined %}max="{{ field.max }}"{% endif %}
+        {% if is_companion %}data-required="{% if field.required %}true{% else %}false{% endif %}"{% endif %}
+        {% if field.required %}required{% endif %}
+    />
+    {% else %}
+    <label for="field-{{ field.name }}"
+        >{{ field.label }}{% if field.required %}
+        <span class="required-marker" aria-hidden="true">*</span>
+        {% endif %}</label
+    >
+    {% if field.note_text %} {% set note_type = field.note_type | default('info') %}
+    <details class="form-field-note form-field-note--{{ note_type }}">
+        <summary>
+            <span class="form-field-note-title">
+                {% if note_type == 'caution' %}
+                <svg class="form-field-note-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3.5 L21.5 20 H2.5 Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+                    <rect x="11" y="9" width="2" height="6" rx="1" fill="currentColor" />
+                    <circle cx="12" cy="17.5" r="1.2" fill="currentColor" />
+                </svg>
+                {% elif note_type == 'warning' %}
+                <svg class="form-field-note-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8 3 H16 L21 8 V16 L16 21 H8 L3 16 V8 Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+                    <rect x="11" y="7" width="2" height="7" rx="1" fill="currentColor" />
+                    <circle cx="12" cy="17" r="1.2" fill="currentColor" />
+                </svg>
+                {% else %}
+                <svg class="form-field-note-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
+                    <circle cx="12" cy="8" r="1.2" fill="currentColor" />
+                    <rect x="11" y="11" width="2" height="6" rx="1" fill="currentColor" />
+                </svg>
+                {% endif %}
+                <span class="sr-only"
+                    >{% if note_type == 'caution' %}Caution: {% elif note_type == 'warning' %}Warning: {% else %}Info: {% endif %}</span
+                >{{ field.note_title }}
+            </span>
+        </summary>
+        {{ field.note_text | markdown }}
+    </details>
+    {% endif %}
+    <input
+        id="field-{{ field.name }}"
+        type="{{ field.type }}"
+        name="{{ field.name }}"
+        maxlength="{{ field.maxlength | default(max_text_length) }}"
+        {% if field.minlength is defined %}minlength="{{ field.minlength }}"{% endif %}
+        placeholder="Type your answer here"
+        {% if is_companion %}data-required="{% if field.required %}true{% else %}false{% endif %}"{% endif %}
+        {% if field.required %}required{% endif %}
+    />
+    {% endif %}
+    {% if field.type in ('text', 'email', 'textarea') %}
+    <p class="char-counter" aria-hidden="true"></p>
+    {% endif %}
+    {% if field.conditional_options %}
+        {% for option, companions in field.conditional_options.items() %}
+            {% for companion in companions %}
+    <div class="form-field-companion" data-companion-of="{{ field.name }}" data-companion-when="{{ option }}" hidden>
+        {{ render_field(companion, is_companion=True) }}
+    </div>
+            {% endfor %}
+        {% endfor %}
+    {% endif %}
+</div>
+{% endmacro %}
+{% if turnstile_site_key %}
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+{% endif %}
+<link rel="stylesheet" href="{{ css_url }}" />
+<form id="applicationForm" class="application-form" method="post" action="{{ action }}" novalidate>
+    {% for field in application_fields %}{{ render_field(field) }}{% endfor %}
+    {% if turnstile_site_key %}
+    <div class="cf-turnstile" data-sitekey="{{ turnstile_site_key }}" data-size="flexible"></div>
+    {% endif %}
+    <div id="applicationFormMessage" class="form-message" role="status" hidden></div>
+    <button type="submit" class="btn">Submit Application</button>
+</form>
+<script src="{{ js_url }}"></script>
