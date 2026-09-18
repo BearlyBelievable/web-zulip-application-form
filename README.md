@@ -197,11 +197,16 @@ that reads `data/application-fields.json` and renders every field,
 using CSS classes like `.application-form`, `.form-field`,
 `.radio-group`, `.checkbox-group`, and `.form-message` (with an
 `is-success` or `is-error` class added once a submission finishes)
-that you can style yourself. It also disables the submit button
-while a submission is in flight and shows the result inline. To
-make Pelican actually build a page with that template, add
-`Template: application` to the metadata of whichever content page
-you want it to appear on.
+that you can style yourself. It disables the submit button until
+every required field validates, highlights an invalid field with a
+`.has-error` class on its `.form-field` once you've interacted with
+it, and shows a live `used / max` count in a `.char-counter` element
+once a text field is close to its length limit. Both use normalized
+default colors that you can replace by setting the
+`--zulip-apply-error-color` and `--zulip-apply-warn-color` CSS
+custom properties in your own stylesheet. To make Pelican actually
+build a page with that template, add `Template: application` to the
+metadata of whichever content page you want it to appear on.
 
 If you'd rather write your own markup, drop [`render-fields.example.jinja`](examples/render-fields.example.jinja)
 into your template where the inputs go instead. It loops over

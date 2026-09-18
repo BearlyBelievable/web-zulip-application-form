@@ -6,7 +6,9 @@ block extra_head %} {% if TURNSTILE_SITE_KEY %}
     async
     defer
 ></script>
-{% endif %} {% endblock extra_head %} {% block page_title %}
+{% endif %}
+<link rel="stylesheet" href="{{ SITEURL }}/extra/css/application-form.css" />
+{% endblock extra_head %} {% block page_title %}
 <h1>{{ page.title }}</h1>
 {% endblock %} {% block content %} {% set content_parts = (page.content |
 inject_apply_by_email_link).split('<!--FORM_SPLIT-->') %}
@@ -318,6 +320,9 @@ inject_apply_by_email_link).split('<!--FORM_SPLIT-->') %}
         %}
     />
     {% endif %}
+    {% if field.type in ('text', 'email', 'textarea') %}
+    <p class="char-counter" aria-hidden="true"></p>
+    {% endif %}
 </div>
 {% if field.conditional_options %}
     {% for option, companions in field.conditional_options.items() %}
@@ -360,95 +365,5 @@ inject_apply_by_email_link).split('<!--FORM_SPLIT-->') %}
 <section class="content-card">
     {{ content_parts[1] }}
 </section>
-<script>
-    const applicationForm = document.getElementById('applicationForm');
-    const applicationSubmitButton = applicationForm.querySelector('button[type="submit"]');
-    const applicationMessage = document.getElementById('applicationFormMessage');
-    const applicationSubmitButtonText = applicationSubmitButton.textContent;
-
-    function fieldValue(name) {
-        const checked = applicationForm.querySelectorAll(`[name="${name}"]:checked`);
-        if (checked.length) {
-            if (checked[0].type === 'checkbox') {
-                return Array.from(checked).map((el) => el.value);
-            }
-            return checked[0].value;
-        }
-        const select = applicationForm.querySelector(`select[name="${name}"]`);
-        return select ? select.value : '';
-    }
-
-    function syncCompanion(companion) {
-        const fieldName = companion.getAttribute('data-companion-of');
-        const expected = companion.getAttribute('data-companion-when');
-        const value = fieldValue(fieldName);
-        const show = Array.isArray(value) ? value.includes(expected) : value === expected;
-        companion.hidden = !show;
-        companion.querySelectorAll('input, textarea, select').forEach((input) => {
-            if (input.dataset.required === 'true') {
-                input.required = show;
-            }
-        });
-    }
-
-    applicationForm.querySelectorAll('[data-companion-of]').forEach((companion) => {
-        const fieldName = companion.getAttribute('data-companion-of');
-        applicationForm.querySelectorAll(`[name="${fieldName}"]`).forEach((input) => {
-            input.addEventListener('change', () => syncCompanion(companion));
-        });
-        syncCompanion(companion);
-    });
-
-    applicationForm.querySelectorAll('[data-multiselect-required]').forEach((group) => {
-        const boxes = group.querySelectorAll('input[type="checkbox"]');
-        function syncMultiselectValidity() {
-            const anyChecked = Array.from(boxes).some((box) => box.checked);
-            boxes.forEach((box, index) => {
-                box.setCustomValidity(!anyChecked && index === 0 ? 'Please select at least one option.' : '');
-            });
-        }
-        boxes.forEach((box) => box.addEventListener('change', syncMultiselectValidity));
-        syncMultiselectValidity();
-    });
-
-    function showApplicationResult(ok, data) {
-        applicationMessage.hidden = false;
-        if (ok && data && data.success) {
-            applicationMessage.textContent = 'Your application has been submitted.';
-            applicationMessage.className = 'form-message is-success';
-            applicationSubmitButton.textContent = 'Submitted';
-            return;
-        }
-        applicationMessage.textContent = (data && data.error) || 'Something went wrong. Please try again.';
-        applicationMessage.className = 'form-message is-error';
-        applicationSubmitButton.disabled = false;
-        applicationSubmitButton.textContent = applicationSubmitButtonText;
-        if (window.turnstile) {
-            window.turnstile.reset();
-        }
-    }
-
-    applicationForm.addEventListener('submit', (event) => {
-        event.preventDefault();
-
-        if (!applicationForm.checkValidity()) {
-            applicationForm.reportValidity();
-            return;
-        }
-
-        applicationSubmitButton.disabled = true;
-        applicationSubmitButton.textContent = 'Submitting…';
-        applicationMessage.hidden = true;
-
-        fetch('/apply', { method: 'POST', body: new FormData(applicationForm) })
-            .then((response) => {
-                return response.json().then((data) => {
-                    showApplicationResult(response.ok, data);
-                });
-            })
-            .catch(() => {
-                showApplicationResult(false, null);
-            });
-    });
-</script>
+<script src="{{ SITEURL }}/extra/js/application-form.js"></script>
 {% endblock %}

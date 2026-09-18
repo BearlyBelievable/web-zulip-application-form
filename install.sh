@@ -313,6 +313,17 @@ PYEOF
         echo "Added the application_fields JINJA_GLOBALS wiring to pelicanconf.py."
     fi
 
+    if grep -q "^STATIC_PATHS" "$site_root/pelicanconf.py"; then
+        if ! grep -q "\"extra\"\|'extra'" "$site_root/pelicanconf.py"; then
+            static_paths_line=$(grep -n "^STATIC_PATHS" "$site_root/pelicanconf.py" | head -1 | cut -d: -f1)
+            echo "pelicanconf.py already defines STATIC_PATHS on line $static_paths_line. Add"
+            echo "'extra' to it yourself so Pelican serves the application form's script and stylesheet."
+        fi
+    else
+        printf '\nSTATIC_PATHS = ["extra"]\n' >> "$site_root/pelicanconf.py"
+        echo "Added STATIC_PATHS = [\"extra\"] to pelicanconf.py."
+    fi
+
     template_overrides_dir=$(sed -n -E \
         "s/^THEME_TEMPLATES_OVERRIDES[[:space:]]*=[[:space:]]*\[[[:space:]]*['\"]([^'\"]+)['\"].*/\1/p" \
         "$site_root/pelicanconf.py" | head -1)
@@ -341,6 +352,16 @@ PYEOF
         if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
             cp "$APP_DIR/examples/application.html" "$template_file"
             echo "Wrote $template_file."
+
+            js_file="$site_root/content/extra/js/application-form.js"
+            mkdir -p "$(dirname "$js_file")"
+            cp "$APP_DIR/examples/application-form.js" "$js_file"
+            echo "Wrote $js_file."
+
+            css_file="$site_root/content/extra/css/application-form.css"
+            mkdir -p "$(dirname "$css_file")"
+            cp "$APP_DIR/examples/application-form.css" "$css_file"
+            echo "Wrote $css_file."
         else
             echo "Left $template_file unchanged."
         fi

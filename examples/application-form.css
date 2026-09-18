@@ -1,0 +1,165 @@
+.application-form {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+}
+
+.application-form .btn {
+    margin-top: 0;
+}
+
+.form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.form-field[hidden] {
+    display: none;
+}
+
+.form-field-fieldset {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    min-width: 0;
+}
+
+.required-marker {
+    color: var(--zulip-apply-error-color, #dc2626);
+}
+
+.radio-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-self: flex-start;
+    gap: 8px 20px;
+    padding: 0 15.5px;
+}
+
+.checkbox-group {
+    display: flex;
+    flex-direction: column;
+    align-self: flex-start;
+    padding: 0 15.5px;
+}
+
+.radio-group label,
+.checkbox-group label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    min-height: 44px;
+    font-weight: 400;
+}
+
+.radio-group input,
+.checkbox-group input {
+    margin: 0;
+}
+
+.form-field-note {
+    margin-bottom: 0;
+    border-radius: 6px;
+}
+
+.form-field-note summary,
+.form-field-note p {
+    color: inherit;
+}
+
+.form-field-note summary {
+    margin: 0;
+    padding: 10px 14px;
+    font-size: 0.9375rem;
+    cursor: pointer;
+}
+
+.form-field-note-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+}
+
+.form-field-note-icon {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+}
+
+.form-field-note p {
+    margin: 0;
+    padding: 0 14px 10px;
+    font-size: 0.875rem;
+}
+
+.form-field-note--info {
+    background: #dbeafe;
+    color: #1e3a5f;
+}
+
+.form-field-note--caution {
+    background: #fde68a;
+    color: #6d5b17;
+}
+
+.form-field-note--warning {
+    background: #fbdcdc;
+    color: #7a1f1f;
+}
+
+.form-message {
+    padding: 12px 16px;
+    border-radius: 6px;
+    font-size: 0.9375rem;
+}
+
+.form-message.is-success {
+    background: color-mix(in srgb, var(--zulip-apply-success-color, #16a34a) 15%, transparent);
+    color: var(--zulip-apply-success-color, #16a34a);
+}
+
+.form-message.is-error {
+    background: color-mix(in srgb, var(--zulip-apply-error-color, #dc2626) 15%, transparent);
+    color: var(--zulip-apply-error-color, #dc2626);
+}
+
+.form-field.has-error input[type='text'],
+.form-field.has-error input[type='email'],
+.form-field.has-error input[type='number'],
+.form-field.has-error select,
+.form-field.has-error textarea {
+    border-color: var(--zulip-apply-error-color, #dc2626);
+    box-shadow:
+        0 0 0 2px color-mix(in srgb, var(--zulip-apply-error-color, #dc2626) 30%, transparent),
+        0 0 8px 2px color-mix(in srgb, var(--zulip-apply-error-color, #dc2626) 35%, transparent);
+}
+
+.form-field.has-error .radio-group,
+.form-field.has-error .checkbox-group {
+    box-shadow:
+        0 0 0 2px var(--zulip-apply-error-color, #dc2626),
+        0 0 8px 2px color-mix(in srgb, var(--zulip-apply-error-color, #dc2626) 40%, transparent);
+}
+
+.char-counter {
+    margin: 0;
+    font-size: 0.8125rem;
+}
+
+.char-counter:empty {
+    display: none;
+}
+
+.char-counter.is-near-limit {
+    color: var(--zulip-apply-warn-color, #d97706);
+}
+
+.char-counter.is-at-limit {
+    color: var(--zulip-apply-error-color, #dc2626);
+}
