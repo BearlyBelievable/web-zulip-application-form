@@ -1,15 +1,17 @@
 import re
 
 from config import STRINGS, read_app_config
-from field_schema import allowed_options, name_conditional_fields
+from field_schema import allowed_options
 
 
 def flatten_active_fields(form, fields):
     active_fields = []
     for field in fields:
         active_fields.append(field)
-        conditional_options = field.get("conditional_options")
-        if not conditional_options:
+        if field["type"] not in ("boolean", "select", "multiselect"):
+            continue
+        options = field.get("options")
+        if not isinstance(options, dict):
             continue
 
         if field["type"] == "multiselect":
@@ -17,10 +19,9 @@ def flatten_active_fields(form, fields):
         else:
             selected_options = [form.get(field["name"], "")]
 
-        for option, children in conditional_options.items():
-            if option in selected_options:
-                named_fields = name_conditional_fields(children, field["name"], option)
-                active_fields.extend(flatten_active_fields(form, named_fields))
+        for option, nested_field in options.items():
+            if nested_field and option in selected_options:
+                active_fields.extend(flatten_active_fields(form, [nested_field]))
 
     return active_fields
 
@@ -60,8 +61,9 @@ def validate_text_value(value, field):
         default_max = read_app_config("max_textarea_length", default=1000, cast=int)
     else:
         default_max = read_app_config("max_text_length", default=250, cast=int)
-    max_len = field.get("maxlength", default_max)
-    min_len = field.get("minlength")
+    length = field.get("length", {})
+    max_len = length.get("max", default_max)
+    min_len = length.get("min")
     if len(value) > max_len:
         raise ValidationError("too_long", field)
     if min_len is not None and len(value) < min_len:
@@ -74,9 +76,10 @@ def validate_number_value(value, field):
     if not re.fullmatch(r"-?\d+", value):
         raise ValidationError("not_a_number", field)
     num = int(value)
-    if "min" in field and num < field["min"]:
+    value_range = field.get("range", {})
+    if "min" in value_range and num < value_range["min"]:
         raise ValidationError("below_minimum", field)
-    if "max" in field and num > field["max"]:
+    if "max" in value_range and num > value_range["max"]:
         raise ValidationError("above_maximum", field)
 
 

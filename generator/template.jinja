@@ -43,7 +43,7 @@
         {% if field.required %}required{% endif %}
     >
         <option value="" disabled selected>Choose one</option>
-        {% for option in field.options + ((field.conditional_options or {}).keys() | list) %}
+        {% for option in field.options.keys() %}
         <option value="{{ option }}">{{ option }}</option>
         {% endfor %}
     </select>
@@ -59,7 +59,7 @@
             data-multiselect="{{ field.name }}"
             {% if field.required %}data-multiselect-required="true"{% endif %}
         >
-            {% for option in field.options + ((field.conditional_options or {}).keys() | list) %}
+            {% for option in field.options.keys() %}
             <label
                 ><input
                     type="checkbox"
@@ -80,8 +80,8 @@
     <textarea
         id="field-{{ field.name }}"
         name="{{ field.name }}"
-        maxlength="{{ field.maxlength | default(max_textarea_length) }}"
-        {% if field.minlength is defined %}minlength="{{ field.minlength }}"{% endif %}
+        maxlength="{{ field.get('length', {}).get('max', max_textarea_length) }}"
+        {% if field.length and field.length.min is defined %}minlength="{{ field.length.min }}"{% endif %}
         placeholder="Type your answer here"
         {% if is_companion %}data-required="{% if field.required %}true{% else %}false{% endif %}"{% endif %}
         {% if field.required %}required{% endif %}
@@ -97,8 +97,8 @@
         type="number"
         name="{{ field.name }}"
         placeholder="00"
-        {% if field.min is defined %}min="{{ field.min }}"{% endif %}
-        {% if field.max is defined %}max="{{ field.max }}"{% endif %}
+        {% if field.range and field.range.min is defined %}min="{{ field.range.min }}"{% endif %}
+        {% if field.range and field.range.max is defined %}max="{{ field.range.max }}"{% endif %}
         {% if is_companion %}data-required="{% if field.required %}true{% else %}false{% endif %}"{% endif %}
         {% if field.required %}required{% endif %}
     />
@@ -108,7 +108,18 @@
         <span class="required-marker" aria-hidden="true">*</span>
         {% endif %}</label
     >
-    {% if field.note_text %} {% set note_type = field.note_type | default('info') %}
+    <input
+        id="field-{{ field.name }}"
+        type="{{ field.type }}"
+        name="{{ field.name }}"
+        maxlength="{{ field.get('length', {}).get('max', max_text_length) }}"
+        {% if field.length and field.length.min is defined %}minlength="{{ field.length.min }}"{% endif %}
+        placeholder="Type your answer here"
+        {% if is_companion %}data-required="{% if field.required %}true{% else %}false{% endif %}"{% endif %}
+        {% if field.required %}required{% endif %}
+    />
+    {% endif %}
+    {% if field.note %} {% set note_type = field.note.type | default('info') %}
     <details class="form-field-note form-field-note--{{ note_type }}">
         <summary>
             <span class="form-field-note-title">
@@ -133,33 +144,22 @@
                 {% endif %}
                 <span class="sr-only"
                     >{% if note_type == 'caution' %}Caution: {% elif note_type == 'warning' %}Warning: {% else %}Info: {% endif %}</span
-                >{{ field.note_title }}
+                >{{ field.note.title }}
             </span>
         </summary>
-        {{ field.note_text | markdown }}
+        {{ field.note.text | markdown }}
     </details>
-    {% endif %}
-    <input
-        id="field-{{ field.name }}"
-        type="{{ field.type }}"
-        name="{{ field.name }}"
-        maxlength="{{ field.maxlength | default(max_text_length) }}"
-        {% if field.minlength is defined %}minlength="{{ field.minlength }}"{% endif %}
-        placeholder="Type your answer here"
-        {% if is_companion %}data-required="{% if field.required %}true{% else %}false{% endif %}"{% endif %}
-        {% if field.required %}required{% endif %}
-    />
     {% endif %}
     {% if field.type in ('text', 'email', 'textarea') %}
     <p class="char-counter" aria-hidden="true"></p>
     {% endif %}
-    {% if field.conditional_options %}
-        {% for option, companions in field.conditional_options.items() %}
-            {% for companion in companions %}
+    {% if field.options and field.type in ('boolean', 'select', 'multiselect') %}
+        {% for option, companion in field.options.items() %}
+            {% if companion %}
     <div class="form-field-companion" data-companion-of="{{ field.name }}" data-companion-when="{{ option }}" hidden>
         {{ render_field(companion, is_companion=True) }}
     </div>
-            {% endfor %}
+            {% endif %}
         {% endfor %}
     {% endif %}
 </div>

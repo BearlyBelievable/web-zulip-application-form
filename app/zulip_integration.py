@@ -1,4 +1,5 @@
 import ast
+import configparser
 import os
 import re
 import subprocess
@@ -8,6 +9,7 @@ import requests
 from config import read_app_config, read_app_secret
 
 ZULIP_SETTINGS_PATH = "/etc/zulip/settings.py"
+ZULIP_SECRETS_PATH = "/etc/zulip/zulip-secrets.conf"
 ZULIP_MANAGE_PY_PATH = "/home/zulip/deployments/current/manage.py"
 
 CHECK_APPLICATION_EMAIL_SCRIPT = """
@@ -30,9 +32,6 @@ else:
 
 
 def read_zulip_setting(name):
-    """Reads a single setting from the Zulip settings.py file by parsing
-    it as text, since this app runs without a Zulip Django environment.
-    """
     with open(ZULIP_SETTINGS_PATH) as f:
         tree = ast.parse(f.read(), filename=ZULIP_SETTINGS_PATH)
     for node in tree.body:
@@ -41,15 +40,16 @@ def read_zulip_setting(name):
                 if isinstance(target, ast.Name) and target.id == name:
                     return ast.literal_eval(node.value)
     else:
-        # The loop finished without finding an assignment to `name`.
         raise KeyError(f"{name} not found in {ZULIP_SETTINGS_PATH}")
 
 
+def read_zulip_secret(name):
+    parser = configparser.ConfigParser()
+    parser.read(ZULIP_SECRETS_PATH)
+    return parser.get("secrets", name, fallback="")
+
+
 def check_application_email(email):
-    """Runs CHECK_APPLICATION_EMAIL_SCRIPT inside the Zulip environment
-    via `manage.py shell`, since this app has no direct access to the
-    Zulip database or ORM.
-    """
     result = subprocess.run(
         [ZULIP_MANAGE_PY_PATH, "shell"],
         input=CHECK_APPLICATION_EMAIL_SCRIPT,
@@ -58,8 +58,6 @@ def check_application_email(email):
         text=True,
         timeout=30,
     )
-    # manage.py shell may print other output before the script runs.
-    # Only the RESULT: line is meaningful.
     for line in result.stdout.splitlines():
         if line.startswith("RESULT:"):
             return line[len("RESULT:") :]
@@ -67,6 +65,71 @@ def check_application_email(email):
         f"check_application_email.py produced no RESULT line: "
         f"stdout={result.stdout!r} stderr={result.stderr!r}"
     )
+
+
+DETECT_REALMS_SCRIPT = """
+from django.conf import settings
+
+from zerver.models import Realm
+
+for realm in Realm.objects.exclude(string_id=settings.SYSTEM_BOT_REALM):
+    print(f"REALM:{realm.name}|{realm.url}")
+"""
+
+
+def detect_realms():
+    result = subprocess.run(
+        [ZULIP_MANAGE_PY_PATH, "shell"],
+        input=DETECT_REALMS_SCRIPT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    realms = []
+    for line in result.stdout.splitlines():
+        if line.startswith("REALM:"):
+            name, _, url = line[len("REALM:") :].partition("|")
+            realms.append((name, url))
+    return realms
+
+
+DETECT_CHANNELS_SCRIPT = """
+import os
+
+from zerver.models import Recipient, Stream, Subscription, get_user_profile_by_email
+
+bot_email = os.environ["BOT_EMAIL"]
+
+try:
+    bot = get_user_profile_by_email(bot_email)
+except Exception:
+    bot = None
+
+if bot is not None:
+    stream_ids = Subscription.objects.filter(
+        user_profile=bot, active=True, recipient__type=Recipient.STREAM
+    ).values_list("recipient__type_id", flat=True)
+    for stream in Stream.objects.filter(id__in=stream_ids, deactivated=False).order_by("name"):
+        label = stream.name + (" (private)" if stream.invite_only else "")
+        print(f"CHANNEL:{label}|{stream.id}")
+"""
+
+
+def detect_channels(bot_email):
+    result = subprocess.run(
+        [ZULIP_MANAGE_PY_PATH, "shell"],
+        input=DETECT_CHANNELS_SCRIPT,
+        env={**os.environ, "BOT_EMAIL": bot_email},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    channels = []
+    for line in result.stdout.splitlines():
+        if line.startswith("CHANNEL:"):
+            label, _, channel_id = line[len("CHANNEL:") :].rpartition("|")
+            channels.append((label, channel_id))
+    return channels
 
 
 def post_to_zulip(topic, body):

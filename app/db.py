@@ -86,7 +86,7 @@ def is_ip_rate_limited(ip):
 def check_and_record_attempt(ip, email):
     now = datetime.now(tz=timezone.utc).isoformat()
     with get_applications_db() as conn:
-        # BEGIN IMMEDIATE takes the write lock up front. Without it, two
+        # Same BEGIN IMMEDIATE reasoning as claim_pending_application: two
         # concurrent requests could each count the same attempts as
         # under the limit and both insert, letting more attempts through
         # than the limit allows.

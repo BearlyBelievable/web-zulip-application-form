@@ -7,23 +7,18 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 if ! command -v systemctl &>/dev/null; then
-    echo "Error: systemctl not found. This script assumes a systemd-based" >&2
-    echo "Ubuntu or Debian system, matching the officially supported platforms" >&2
-    echo "for Zulip" >&2
-    echo "(this app requires Zulip to already be installed on this server)." >&2
+    echo "Error: systemctl not found. This requires a systemd-based Ubuntu or" >&2
+    echo "Debian system with Zulip already installed." >&2
     exit 1
 fi
 
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
 SERVICE_NAME=web-zulip-application-form
 SERVICE_UNIT_PATH=/etc/systemd/system/$SERVICE_NAME.service
 CHECK_PENDING_UNIT_NAME=web-zulip-application-form-check-pending
 CHECK_PENDING_SERVICE_UNIT_PATH=/etc/systemd/system/$CHECK_PENDING_UNIT_NAME.service
 CHECK_PENDING_TIMER_UNIT_PATH=/etc/systemd/system/$CHECK_PENDING_UNIT_NAME.timer
-RUN_AS_USER=zulip
-SECRETS_FILE="$APP_DIR/secrets.conf"
-CONFIG_FILE="$APP_DIR/config.conf"
-ZULIP_MANAGE_PY=/home/zulip/deployments/current/manage.py
 
 if [ ! -f /etc/zulip/settings.py ]; then
     echo "Error: /etc/zulip/settings.py not found. This app requires Zulip to" >&2
@@ -33,34 +28,11 @@ fi
 
 if ! id -u "$RUN_AS_USER" &>/dev/null; then
     echo "Error: the '$RUN_AS_USER' user doesn't exist, but /etc/zulip/settings.py" >&2
-    echo "does. This script expects a standard Zulip install. It reuses the" >&2
-    echo "existing Zulip system user, since this app already needs read access" >&2
-    echo "to that file." >&2
+    echo "does. This requires a standard Zulip install." >&2
     exit 1
 fi
 
 echo "App root: $APP_DIR"
-
-get_conf_value() {
-    local key="$1" file="$2"
-    grep -E "^${key}[[:space:]]*=" "$file" | head -1 | cut -d= -f2- | sed 's/^[[:space:]]*//'
-}
-
-set_conf_value() {
-    local key="$1" value="$2" file="$3" escaped
-    escaped=$(printf '%s' "$value" | sed -e 's/[\&|]/\\&/g')
-    sed -i "s|^${key}[[:space:]]*=.*|$key = $escaped|" "$file"
-}
-
-require_absolute_path() {
-    case "$1" in
-        /*) ;;
-        *)
-            echo "Error: $1 must be an absolute path." >&2
-            exit 1
-            ;;
-    esac
-}
 
 prompt_for_key() {
     local key="$1" label="$2" silent="$3" required="$4" file="$5" current new_value
@@ -87,6 +59,122 @@ prompt_for_key() {
     fi
 }
 
+prompt_setting() {
+    local mode="$1" key="$2" label="$3" silent="$4" file="$5"
+    if [ "$mode" = "if_missing" ] && [ -n "$(get_conf_value "$key" "$file")" ]; then
+        return
+    fi
+    prompt_for_key "$key" "$label" "$silent" yes "$file"
+}
+
+prompt_channel_id() {
+    local mode="$1" current bot_email name channel_id options=() ids=() choice
+    local page_size=15 start=0 total end page_options=() extra=()
+    current=$(get_conf_value application_channel_id "$CONFIG_FILE")
+    if [ -z "$current" ]; then
+        bot_email=$(get_conf_value zulip_bot_email "$CONFIG_FILE")
+        if [ -n "$bot_email" ]; then
+            while IFS='|' read -r name channel_id; do
+                [ -n "$channel_id" ] && options+=("$name") && ids+=("$channel_id")
+            done < <(cd "$APP_DIR/app" && "$VENV_PYTHON" -c "
+from zulip_integration import detect_channels
+for name, channel_id in detect_channels('$bot_email'):
+    print(f'{name}|{channel_id}')
+" 2>/dev/null || true)
+
+            total="${#ids[@]}"
+            if [ "$total" -gt 0 ]; then
+                echo "Found these channels the bot has access to:"
+                while true; do
+                    page_options=("${options[@]:$start:$page_size}")
+                    end=$((start + ${#page_options[@]}))
+                    extra=()
+                    [ "$end" -lt "$total" ] && extra+=("show more")
+                    extra+=("other (type a channel ID)")
+                    PS3="Which channel should new applications post to? "
+                    select choice in "${page_options[@]}" "${extra[@]}"; do
+                        [ -n "$choice" ] && break
+                        echo "Please choose a number 1-$((${#page_options[@]} + ${#extra[@]}))." >&2
+                    done
+                    if [ "$REPLY" -le "${#page_options[@]}" ]; then
+                        set_conf_value application_channel_id "${ids[$((start + REPLY - 1))]}" "$CONFIG_FILE"
+                        break
+                    elif [ "$choice" = "show more" ]; then
+                        start="$end"
+                    else
+                        break
+                    fi
+                done
+            else
+                echo "Couldn't find any channels the bot has access to yet."
+            fi
+            echo "If the channel you want isn't listed, add the bot to it in Zulip, then run install.sh again."
+        fi
+    fi
+    prompt_setting "$mode" application_channel_id "Channel to post new applications to, by numeric ID (channel's ... menu > Copy link to channel > number after channel/)" no "$CONFIG_FILE"
+    CHANNEL_ID=$(get_conf_value application_channel_id "$CONFIG_FILE")
+    if ! [[ "$CHANNEL_ID" =~ ^[0-9]+$ ]]; then
+        echo "Error: application_channel_id must be a number, the channel's ID, not its name." >&2
+        exit 1
+    fi
+}
+
+validate_turnstile_pair() {
+    local site_key secret
+    site_key=$(get_conf_value turnstile_site_key "$CONFIG_FILE")
+    secret=$(get_conf_value turnstile_secret "$SECRETS_FILE")
+    if [ -n "$site_key" ] && [ -z "$secret" ]; then
+        echo "Error: turnstile_site_key is set but turnstile_secret is not. Set both or clear both." >&2
+        exit 1
+    fi
+    if [ -z "$site_key" ] && [ -n "$secret" ]; then
+        echo "Error: turnstile_secret is set but turnstile_site_key is not. Set both or clear both." >&2
+        exit 1
+    fi
+}
+
+prompt_zulip_site_url() {
+    local mode="$1" current name url options=() urls=() choice
+    current=$(get_conf_value zulip_site_url "$CONFIG_FILE")
+    if [ "$mode" = "if_missing" ] && [ -n "$current" ]; then
+        return
+    fi
+    if [ -z "$current" ]; then
+        while IFS='|' read -r name url; do
+            [ -n "$url" ] && options+=("$name ($url)") && urls+=("$url")
+        done < <(cd "$APP_DIR/app" && "$VENV_PYTHON" -c "
+from zulip_integration import detect_realms
+for name, url in detect_realms():
+    print(f'{name}|{url}')
+" 2>/dev/null || true)
+
+        if [ "${#urls[@]}" -eq 1 ]; then
+            set_conf_value zulip_site_url "${urls[0]}" "$CONFIG_FILE"
+        elif [ "${#urls[@]}" -gt 1 ]; then
+            echo "Found multiple organizations on this server:"
+            PS3="Which organization is this form for? "
+            select choice in "${options[@]}" "other (type a URL)"; do
+                [ -n "$choice" ] && break
+                echo "Please choose a number 1-$((${#options[@]} + 1))." >&2
+            done
+            [ "$REPLY" -le "${#urls[@]}" ] && set_conf_value zulip_site_url "${urls[$((REPLY - 1))]}" "$CONFIG_FILE"
+        fi
+    fi
+    prompt_for_key zulip_site_url "Zulip site URL" no yes "$CONFIG_FILE"
+}
+
+prompt_core_settings() {
+    local mode="$1"
+    prompt_setting "$mode" zulip_bot_email "Application bot's email, for Zulip API access (Personal settings > Bots)" no "$CONFIG_FILE"
+    prompt_channel_id "$mode"
+    prompt_setting "$mode" zulip_bot_api_key "Application bot's API key" yes "$SECRETS_FILE"
+}
+
+prompt_contact_email() {
+    local mode="$1"
+    prompt_setting "$mode" contact_email "Where alert emails are sent (technical failures, held applications), and the address shown to an applicant who's already applied and waiting on review" no "$CONFIG_FILE"
+}
+
 detect_site_confs() {
     local kind="$1" f
     case "$kind" in
@@ -107,7 +195,7 @@ detect_site_confs() {
 }
 
 resolve_site_conf() {
-    local kind="$1" candidates=() override choice i c
+    local kind="$1" candidates=() override choice c
 
     while IFS= read -r c; do
         [ -n "$c" ] && candidates+=("$c")
@@ -126,17 +214,13 @@ resolve_site_conf() {
 
     if [ "${#candidates[@]}" -gt 1 ]; then
         echo "Found multiple $kind site configs:" >&2
-        i=1
-        for c in "${candidates[@]}"; do
-            echo "  $i) $c" >&2
-            i=$((i + 1))
+        PS3="Which $kind config should I use? "
+        select choice in "${candidates[@]}" "other (type a path)"; do
+            [ -n "$choice" ] && break
+            echo "Please choose a number 1-$((${#candidates[@]} + 1))." >&2
         done
-        echo "  $i) other (type a path)" >&2
-        read -r -p "Which one? " choice
-        if [ "$choice" = "$i" ] || [ -z "$choice" ]; then
+        if [ "$choice" = "other (type a path)" ]; then
             read -r -p "Path to your $kind site config file: " choice
-        else
-            choice="${candidates[$((choice - 1))]}"
         fi
         echo "$choice"
         return
@@ -179,7 +263,7 @@ apply_reverse_proxy_config() {
     diff -u "$backup" "$site_conf" || true
     echo "--------------------------------------"
     read -r -p "Apply this change and reload $kind? [y/N] " confirm
-    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+    if ! confirmed "$confirm"; then
         cp "$backup" "$site_conf"
         echo "Reverted. $site_conf left unchanged. Backup kept at $backup."
         return 1
@@ -215,100 +299,6 @@ apply_reverse_proxy_config() {
     echo "$kind reloaded. Backup of the original file kept at $backup."
 }
 
-ensure_venv() {
-    if [ ! -d "$APP_DIR/.venv" ]; then
-        python3 -m venv "$APP_DIR/.venv"
-    fi
-    "$APP_DIR/.venv/bin/pip" install -q -r "$APP_DIR/requirements.txt"
-}
-
-regenerate_files() {
-    local site_kind site_root fields_file template_overrides_dir
-    local install_template needs_overrides_setting template_file confirm
-
-    site_kind=$(get_conf_value site_kind "$CONFIG_FILE")
-    site_root=$(get_conf_value site_root "$CONFIG_FILE")
-
-    fields_file="$site_root/data/application-fields.json"
-    mkdir -p "$(dirname "$fields_file")"
-    cp "$APP_DIR/application-fields.json" "$fields_file"
-    echo "Wrote $fields_file from application-fields.json."
-
-    max_text_length=$(get_conf_value max_text_length "$CONFIG_FILE")
-    max_textarea_length=$(get_conf_value max_textarea_length "$CONFIG_FILE")
-    turnstile_site_key=$(get_conf_value turnstile_site_key "$CONFIG_FILE")
-
-    if [ "$site_kind" != "Pelican" ]; then
-        js_file="$site_root/application-form.js"
-        css_file="$site_root/application-form.css"
-        cp "$APP_DIR/generator/application-form.js" "$js_file"
-        cp "$APP_DIR/generator/application-form.css" "$css_file"
-        echo "Wrote $js_file and $css_file."
-
-        form_file="$site_root/application-form.html"
-        "$APP_DIR/.venv/bin/python" "$APP_DIR/generator/generate_form.py" "$fields_file" "$form_file" \
-            --max-text-length "${max_text_length:-250}" --max-textarea-length "${max_textarea_length:-1000}" \
-            --turnstile-site-key "$turnstile_site_key" --css-url /application-form.css --js-url /application-form.js
-        echo "Wrote $form_file. Embed its contents in your own page. See README.md."
-        return
-    fi
-
-    if [ ! -f "$site_root/pelicanconf.py" ]; then
-        echo "Error: $site_root/pelicanconf.py not found. $site_root doesn't" >&2
-        echo "look like a Pelican site checkout anymore." >&2
-        exit 1
-    fi
-
-    if grep -q "^STATIC_PATHS" "$site_root/pelicanconf.py"; then
-        if ! grep -q "\"extra\"\|'extra'" "$site_root/pelicanconf.py"; then
-            static_paths_line=$(grep -n "^STATIC_PATHS" "$site_root/pelicanconf.py" | head -1 | cut -d: -f1)
-            echo "pelicanconf.py already defines STATIC_PATHS on line $static_paths_line. Add"
-            echo "'extra' to it yourself so Pelican serves the application form's script and stylesheet."
-        fi
-    else
-        printf '\nSTATIC_PATHS = ["extra"]\n' >> "$site_root/pelicanconf.py"
-        echo "Added STATIC_PATHS = [\"extra\"] to pelicanconf.py."
-    fi
-
-    template_overrides_dir=$(sed -n -E \
-        "s/^THEME_TEMPLATES_OVERRIDES[[:space:]]*=[[:space:]]*\[[[:space:]]*['\"]([^'\"]+)['\"].*/\1/p" \
-        "$site_root/pelicanconf.py" | head -1)
-
-    if [ -z "$template_overrides_dir" ]; then
-        template_overrides_dir="templates"
-        printf '\nTHEME_TEMPLATES_OVERRIDES = ["templates"]\n' >> "$site_root/pelicanconf.py"
-        echo "Added THEME_TEMPLATES_OVERRIDES = [\"templates\"] to pelicanconf.py."
-    fi
-    case "$template_overrides_dir" in
-        /*) ;;
-        *) template_overrides_dir="$site_root/$template_overrides_dir" ;;
-    esac
-    mkdir -p "$template_overrides_dir"
-
-    js_file="$site_root/content/extra/js/application-form.js"
-    mkdir -p "$(dirname "$js_file")"
-    cp "$APP_DIR/generator/application-form.js" "$js_file"
-    echo "Wrote $js_file."
-
-    css_file="$site_root/content/extra/css/application-form.css"
-    mkdir -p "$(dirname "$css_file")"
-    cp "$APP_DIR/generator/application-form.css" "$css_file"
-    echo "Wrote $css_file."
-
-    form_file="$template_overrides_dir/application-form.html"
-    "$APP_DIR/.venv/bin/python" "$APP_DIR/generator/generate_form.py" "$fields_file" "$form_file" \
-        --max-text-length "${max_text_length:-250}" --max-textarea-length "${max_textarea_length:-1000}" \
-        --turnstile-site-key "$turnstile_site_key" --css-url /extra/css/application-form.css --js-url /extra/js/application-form.js
-    echo "Wrote $form_file."
-
-    page_template_file="$template_overrides_dir/application.html"
-    if [ ! -f "$page_template_file" ]; then
-        cp "$APP_DIR/examples/page-template.example.jinja" "$page_template_file"
-        echo "Wrote a starter $page_template_file. Customize it for your own theme,"
-        echo "then add 'Template: application' to the content page's metadata."
-    fi
-}
-
 if [ ! -f "$SECRETS_FILE" ]; then
     cat > "$SECRETS_FILE" <<'EOF'
 [secrets]
@@ -318,9 +308,7 @@ zulip_bot_api_key =
 EOF
 fi
 
-FIRST_RUN=no
 if [ ! -f "$CONFIG_FILE" ]; then
-    FIRST_RUN=yes
     cat > "$CONFIG_FILE" <<'EOF'
 [config]
 site_kind =
@@ -330,13 +318,13 @@ application_channel_id =
 zulip_bot_email =
 application_email_subject =
 contact_email =
+alert_emails_enabled =
+smtp_host =
+smtp_port =
 smtp_user =
-reply_to_email =
 turnstile_site_key =
 
-# Advanced settings below, all optional. install.sh never prompts for
-# these, and the defaults shown here are what the app uses if a
-# setting is missing entirely. Edit a value directly to change it.
+# Advanced settings, optional. Blank values use these defaults.
 max_attempts_per_ip = 3
 max_attempts_per_email = 3
 rate_limit_window_minutes = 60
@@ -345,60 +333,6 @@ max_body_bytes = 8192
 max_text_length = 250
 max_textarea_length = 1000
 EOF
-fi
-
-MODE=setup
-if [ "$FIRST_RUN" = "no" ]; then
-    PS3="What do you want to do? "
-    select MODE_CHOICE in "Change configuration" "Just update the deployed files"; do
-        if [ -n "$MODE_CHOICE" ]; then
-            break
-        fi
-        echo "Please choose a number 1-2."
-    done
-    if [ "$MODE_CHOICE" = "Just update the deployed files" ]; then
-        MODE=update
-    fi
-fi
-
-if [ "$MODE" = "update" ]; then
-    if [ -z "$(get_conf_value site_kind "$CONFIG_FILE")" ] || [ -z "$(get_conf_value site_root "$CONFIG_FILE")" ]; then
-        echo "Error: no site configured yet. Choose \"Change configuration\" first." >&2
-        exit 1
-    fi
-
-    if [ -z "$(get_conf_value smtp_user "$CONFIG_FILE")" ]; then
-        prompt_for_key smtp_user "SMTP from address, used only if a technical failure needs to notify an applicant" no yes "$CONFIG_FILE"
-    fi
-    if [ -z "$(get_conf_value smtp_password "$SECRETS_FILE")" ]; then
-        prompt_for_key smtp_password "SMTP password" yes yes "$SECRETS_FILE"
-    fi
-    if [ -z "$(get_conf_value zulip_site_url "$CONFIG_FILE")" ]; then
-        prompt_for_key zulip_site_url "Zulip site URL (e.g. https://miatsu.co)" no yes "$CONFIG_FILE"
-    fi
-    if [ -z "$(get_conf_value application_channel_id "$CONFIG_FILE")" ]; then
-        prompt_for_key application_channel_id "Channel to post new applications to, by its numeric ID rather than its name, so a later rename doesn't break it (in the left sidebar, click the channel's ... menu, choose Copy link to channel, and use the number right after channel/ in that link)" no yes "$CONFIG_FILE"
-        CHANNEL_ID=$(get_conf_value application_channel_id "$CONFIG_FILE")
-        if ! [[ "$CHANNEL_ID" =~ ^[0-9]+$ ]]; then
-            echo "Error: application_channel_id must be a number, the channel's ID, not its name." >&2
-            exit 1
-        fi
-    fi
-    if [ -z "$(get_conf_value zulip_bot_email "$CONFIG_FILE")" ]; then
-        prompt_for_key zulip_bot_email "Application bot's email address (Personal settings > Bots)" no yes "$CONFIG_FILE"
-    fi
-    if [ -z "$(get_conf_value zulip_bot_api_key "$SECRETS_FILE")" ]; then
-        prompt_for_key zulip_bot_api_key "Application bot's API key" yes yes "$SECRETS_FILE"
-    fi
-    if [ -z "$(get_conf_value contact_email "$CONFIG_FILE")" ]; then
-        prompt_for_key contact_email "Contact address shown to an applicant who's already applied and waiting on review" no yes "$CONFIG_FILE"
-    fi
-
-    ensure_venv
-    regenerate_files
-    echo
-    echo "Rebuild your Pelican site to pick up the changes."
-    exit 0
 fi
 
 PS3="Are you using Pelican for your site, or is it custom? "
@@ -430,7 +364,7 @@ else
         require_absolute_path "$SITE_ROOT"
         if [ ! -d "$SITE_ROOT" ]; then
             read -r -p "$SITE_ROOT doesn't exist yet. Create it? [y/N] " confirm
-            if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+            if ! confirmed "$confirm"; then
                 exit 1
             fi
         fi
@@ -439,27 +373,9 @@ fi
 
 FIELDS_FILE="$SITE_ROOT/data/application-fields.json"
 
-ensure_venv
-regenerate_files
-
-prompt_for_key smtp_user "SMTP from address, used only if a technical failure needs to notify an applicant" no yes "$CONFIG_FILE"
-prompt_for_key smtp_password "SMTP password" yes yes "$SECRETS_FILE"
-prompt_for_key reply_to_email "Reply-to address for emails this app sends (blank to use the SMTP from address)" no no "$CONFIG_FILE"
-
-prompt_for_key zulip_site_url "Zulip site URL (e.g. https://miatsu.co)" no yes "$CONFIG_FILE"
-prompt_for_key application_channel_id "Channel to post new applications to, by its numeric ID rather than its name, so a later rename doesn't break it (in the left sidebar, click the channel's ... menu, choose Copy link to channel, and use the number right after channel/ in that link)" no yes "$CONFIG_FILE"
-CHANNEL_ID=$(get_conf_value application_channel_id "$CONFIG_FILE")
-if ! [[ "$CHANNEL_ID" =~ ^[0-9]+$ ]]; then
-    echo "Error: application_channel_id must be a number, the channel's ID, not its name." >&2
-    exit 1
-fi
-prompt_for_key zulip_bot_email "Application bot's email address (Personal settings > Bots)" no yes "$CONFIG_FILE"
-prompt_for_key zulip_bot_api_key "Application bot's API key" yes yes "$SECRETS_FILE"
-prompt_for_key application_email_subject "Topic to post new applications under (blank uses 'New application')" no no "$CONFIG_FILE"
-prompt_for_key contact_email "Contact address shown to an applicant who's already applied and waiting on review" no yes "$CONFIG_FILE"
-
 prompt_for_key turnstile_site_key "Turnstile site key (blank to skip Cloudflare Turnstile verification)" no no "$CONFIG_FILE"
 prompt_for_key turnstile_secret "Turnstile secret key (blank to skip Cloudflare Turnstile verification)" yes no "$SECRETS_FILE"
+validate_turnstile_pair
 
 TURNSTILE_SITE_KEY=$(get_conf_value turnstile_site_key "$CONFIG_FILE")
 if [ -n "$TURNSTILE_SITE_KEY" ]; then
@@ -473,6 +389,34 @@ if [ -n "$TURNSTILE_SITE_KEY" ]; then
     fi
 fi
 
+ensure_venv
+regenerate_files
+
+prompt_zulip_site_url always
+
+prompt_core_settings always
+prompt_for_key application_email_subject "Topic to post new applications under (blank uses 'New application')" no no "$CONFIG_FILE"
+
+read -r -p "Send alert emails for technical failures and held applications? Recommended. [y/N] " confirm
+if confirmed "$confirm"; then
+    set_conf_value alert_emails_enabled yes "$CONFIG_FILE"
+    if grep -q "^EMAIL_HOST" /etc/zulip/settings.py; then
+        echo "These reuse Zulip's transactional email settings by default."
+        echo "Set any of them to use a different account or server instead."
+    else
+        echo "Zulip doesn't have transactional email configured on this server,"
+        echo "so set these yourself."
+    fi
+    prompt_for_key smtp_host "SMTP server" no no "$CONFIG_FILE"
+    prompt_for_key smtp_port "SMTP port" no no "$CONFIG_FILE"
+    prompt_for_key smtp_user "SMTP login and 'From' address" no no "$CONFIG_FILE"
+    prompt_for_key smtp_password "SMTP password" yes no "$SECRETS_FILE"
+else
+    set_conf_value alert_emails_enabled no "$CONFIG_FILE"
+fi
+
+prompt_contact_email always
+
 echo
 echo "Checking the duplicate-application check against Zulip..."
 if [ ! -f "$ZULIP_MANAGE_PY" ]; then
@@ -481,7 +425,7 @@ if [ ! -f "$ZULIP_MANAGE_PY" ]; then
     echo "check won't work." >&2
     exit 1
 fi
-SMOKE_TEST_RESULT=$(cd "$APP_DIR/app" && "$APP_DIR/.venv/bin/python" -c "
+SMOKE_TEST_RESULT=$(cd "$APP_DIR/app" && "$VENV_PYTHON" -c "
 from zulip_integration import check_application_email
 print('RESULT:' + check_application_email('install-sh-smoke-test@example.com'))
 " 2>&1 | grep "^RESULT:" || true)
@@ -515,29 +459,14 @@ select PROXY_CHOICE in nginx apache caddy "I'll set this up manually"; do
     echo "Please choose a number 1-4."
 done
 
-case "$PROXY_CHOICE" in
-    nginx)
-        if apply_reverse_proxy_config nginx "$APP_DIR/deploy/reverse-proxy/nginx.conf" '}'; then
-            echo "Reverse proxy configured."
-        else
-            echo "Reverse proxy not configured automatically. See $APP_DIR/deploy/reverse-proxy/nginx.conf to add it yourself."
-        fi
-        ;;
-    apache)
-        if apply_reverse_proxy_config apache "$APP_DIR/deploy/reverse-proxy/apache.conf" '</VirtualHost>'; then
-            echo "Reverse proxy configured."
-        else
-            echo "Reverse proxy not configured automatically. See $APP_DIR/deploy/reverse-proxy/apache.conf to add it yourself."
-        fi
-        ;;
-    caddy)
-        if apply_reverse_proxy_config caddy "$APP_DIR/deploy/reverse-proxy/caddy.conf" '}'; then
-            echo "Reverse proxy configured."
-        else
-            echo "Reverse proxy not configured automatically. See $APP_DIR/deploy/reverse-proxy/caddy.conf to add it yourself."
-        fi
-        ;;
-    *)
-        echo "Skipping reverse proxy setup. See $APP_DIR/deploy/reverse-proxy/ for example configs to add yourself."
-        ;;
-esac
+if [ "$PROXY_CHOICE" = "I'll set this up manually" ]; then
+    echo "Skipping reverse proxy setup. See $APP_DIR/deploy/reverse-proxy/ for example configs to add by hand."
+else
+    close_marker='}'
+    [ "$PROXY_CHOICE" = "apache" ] && close_marker='</VirtualHost>'
+    if apply_reverse_proxy_config "$PROXY_CHOICE" "$APP_DIR/deploy/reverse-proxy/$PROXY_CHOICE.conf" "$close_marker"; then
+        echo "Reverse proxy configured."
+    else
+        echo "Reverse proxy not configured automatically. See $APP_DIR/deploy/reverse-proxy/$PROXY_CHOICE.conf to add it by hand."
+    fi
+fi

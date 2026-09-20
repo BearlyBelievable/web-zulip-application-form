@@ -1,16 +1,20 @@
-import re
-
 FIELD_TYPES = {"text", "email", "textarea", "number", "select", "boolean", "multiselect"}
+MAX_NESTING_DEPTH = 2
 
 SCHEMA_ERRORS = {
     "missing_name": "Field schema is missing required key 'name': {field}",
+    "duplicate_name": "Field name '{name}' is used more than once",
     "invalid_type": "Field '{name}' has an invalid or missing 'type'",
     "missing_label": "Field '{name}' is missing required key 'label'",
     "missing_required": "Field '{name}' is missing required key 'required'",
-    "incomplete_note": "Field '{name}' must set 'note_title', 'note_text', and 'note_type' together, or not at all",
-    "missing_options": "Field '{name}' must have an 'options' list",
-    "unexpected_conditional_options": "Field '{name}' has 'conditional_options' but isn't select/multiselect",
-    "invalid_conditional_options": "Field '{name}' has a 'conditional_options' that isn't a dict",
+    "missing_note": "Field '{name}' is missing required key 'note'",
+    "invalid_note": "Field '{name}' has a 'note' that isn't a dict",
+    "incomplete_note": "Field '{name}' must set 'type', 'title', and 'text' together in 'note'",
+    "missing_options": "Field '{name}' must have an 'options' dict",
+    "too_few_options": "Field '{name}' must have at least {min_count} option(s) in 'options'",
+    "invalid_boolean_options": "Field '{name}' has 'options' keys other than 'true'/'false'",
+    "invalid_option_value": "Field '{name}' has an option whose value isn't a dict",
+    "too_deeply_nested": "Field '{name}' is nested more than {max_depth} levels deep",
 }
 
 
@@ -20,19 +24,20 @@ class SchemaError(RuntimeError):
 
 
 def validate_fields_schema(fields):
-    """Validates every field, including nested conditional_options
-    children, using an explicit stack instead of recursion so schema
-    depth is never limited by the Python call stack.
-    """
-    pending = [(field, None) for field in fields]
+    seen_names = set()
+    pending = [(field, 1) for field in fields]
     while pending:
-        field, parent_name = pending.pop()
-        if parent_name is None:
-            if "name" not in field:
-                raise SchemaError("missing_name", field=field)
-            name = field["name"]
-        else:
-            name = parent_name
+        field, depth = pending.pop()
+
+        if "name" not in field:
+            raise SchemaError("missing_name", field=field)
+        name = field["name"]
+        if name in seen_names:
+            raise SchemaError("duplicate_name", name=name)
+        seen_names.add(name)
+
+        if depth > MAX_NESTING_DEPTH:
+            raise SchemaError("too_deeply_nested", name=name, max_depth=MAX_NESTING_DEPTH)
 
         if field.get("type") not in FIELD_TYPES:
             raise SchemaError("invalid_type", name=name)
@@ -41,55 +46,37 @@ def validate_fields_schema(fields):
         if "required" not in field:
             raise SchemaError("missing_required", name=name)
 
-        note_keys = ("note_title", "note_text", "note_type")
-        present_note_keys = [key for key in note_keys if key in field]
-        if present_note_keys and len(present_note_keys) != len(note_keys):
+        if "note" not in field:
+            raise SchemaError("missing_note", name=name)
+        note = field["note"]
+        if not isinstance(note, dict):
+            raise SchemaError("invalid_note", name=name)
+        if note and sorted(note.keys()) != ["text", "title", "type"]:
             raise SchemaError("incomplete_note", name=name)
 
-        conditional_options = field.get("conditional_options")
-        if field["type"] in ("select", "multiselect"):
-            if not isinstance(field.get("options"), list):
+        if field["type"] == "boolean":
+            options = field.get("options")
+            if options is None:
+                continue
+            if not isinstance(options, dict) or not set(options.keys()) <= {"true", "false"}:
+                raise SchemaError("invalid_boolean_options", name=name)
+        elif field["type"] in ("select", "multiselect"):
+            options = field.get("options")
+            if not isinstance(options, dict):
                 raise SchemaError("missing_options", name=name)
-        elif conditional_options is not None:
-            raise SchemaError("unexpected_conditional_options", name=name)
-
-        if not conditional_options:
-            continue
-        if not isinstance(conditional_options, dict):
-            raise SchemaError("invalid_conditional_options", name=name)
-        for option, children in conditional_options.items():
-            for child in children:
-                pending.append((child, f"{name} > {option}"))
-
-
-def name_conditional_fields(fields, parent_name, option):
-    slug = re.sub(r"[^a-z0-9]+", "_", option.lower()).strip("_")
-    base_name = f"{parent_name}_{slug}"
-    named_fields = []
-    for index, field in enumerate(fields):
-        if index == 0:
-            name = base_name
+            min_count = 2 if field["type"] == "select" else 1
+            if len(options) < min_count:
+                raise SchemaError("too_few_options", name=name, min_count=min_count)
         else:
-            name = f"{base_name}_{index + 1}"
-        named_fields.append({**field, "name": name})
-    return named_fields
+            continue
 
-
-def resolve_conditional_names(fields):
-    resolved = []
-    for field in fields:
-        conditional_options = field.get("conditional_options")
-        if conditional_options:
-            field = {**field, "conditional_options": {
-                option: resolve_conditional_names(name_conditional_fields(children, field["name"], option))
-                for option, children in conditional_options.items()
-            }}
-        resolved.append(field)
-    return resolved
+        for nested_field in options.values():
+            if not nested_field:
+                continue
+            if not isinstance(nested_field, dict):
+                raise SchemaError("invalid_option_value", name=name)
+            pending.append((nested_field, depth + 1))
 
 
 def allowed_options(field):
-    conditional_options = field.get("conditional_options")
-    if not conditional_options:
-        return field["options"]
-    return field["options"] + list(conditional_options.keys())
+    return list(field["options"].keys())

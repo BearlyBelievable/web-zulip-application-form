@@ -10,7 +10,7 @@ from markupsafe import Markup
 GENERATOR_DIR = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(GENERATOR_DIR, "..", "app"))
 
-from field_schema import resolve_conditional_names, validate_fields_schema  # noqa: E402
+from field_schema import validate_fields_schema  # noqa: E402
 
 
 def generate(fields, action, css_url, js_url, max_text_length, max_textarea_length, turnstile_site_key):
@@ -19,7 +19,7 @@ def generate(fields, action, css_url, js_url, max_text_length, max_textarea_leng
     env.filters["markdown"] = lambda text: Markup(markdown_lib.markdown(text))
     template = env.get_template("template.jinja")
     return template.render(
-        application_fields=resolve_conditional_names(fields),
+        application_fields=fields,
         action=action,
         css_url=css_url,
         js_url=js_url,
