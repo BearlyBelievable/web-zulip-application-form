@@ -1,9 +1,11 @@
 # Web Zulip application form
 
-![Python](https://img.shields.io/badge/python-3-blue)
-![Flask](https://img.shields.io/badge/flask-3.1-black)
-![Last commit](https://img.shields.io/github/last-commit/BearlyBelievable/web-zulip-application-form)
 [![License](https://img.shields.io/badge/license-PolyForm%20Internal%20Use%201.0.0-orange)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.12-blue)
+![Flask](https://img.shields.io/badge/flask-3.1-black)
+[![Version](https://img.shields.io/badge/version-1.0.0-informational)](CHANGELOG.md)
+![Last commit](https://img.shields.io/github/last-commit/BearlyBelievable/web-zulip-application-form)
+[![Tests](https://github.com/BearlyBelievable/web-zulip-application-form/actions/workflows/tests.yml/badge.svg)](https://github.com/BearlyBelievable/web-zulip-application-form/actions/workflows/tests.yml)
 
 This is a small Flask back-end for hooking up an "Apply to join" form
 to post in a [Zulip](https://zulip.com/) server via a bot account. It
